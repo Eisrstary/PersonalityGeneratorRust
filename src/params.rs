@@ -66,6 +66,12 @@ impl Domain {
     }
 }
 
+impl std::fmt::Display for Domain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // ParamDef —— 编译期常量
 // ═══════════════════════════════════════════════════════════════
