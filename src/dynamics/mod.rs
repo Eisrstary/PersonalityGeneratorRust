@@ -125,8 +125,9 @@ impl DriftEngine {
 
     /// 批量应用所有参数的时间漂移
     pub fn apply_all_drifts(&mut self, now: &Timestamp) -> HashMap<ParameterId, f64> {
-        let ids: Vec<ParameterId> = self.states.keys().cloned().collect();
-        let mut changes = HashMap::new();
+        let mut changes = HashMap::with_capacity(self.states.len());
+        // 收集需要更新的 ID（避免在迭代时借用冲突）
+        let ids: smallvec::SmallVec<[ParameterId; 8]> = self.states.keys().cloned().collect();
 
         for id in ids {
             if let Some(drift) = self.apply_time_drift(&id, now) {

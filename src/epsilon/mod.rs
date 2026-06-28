@@ -127,13 +127,12 @@ impl Epsilon {
         &self,
         values: &HashMap<ParameterId, ParameterValue>,
     ) -> HashMap<ParameterId, ParameterValue> {
-        values
-            .iter()
-            .map(|(id, v)| {
-                let new_val = self.apply(v.as_f64());
-                (id.clone(), ParameterValue::normalized(new_val))
-            })
-            .collect()
+        let mut result = HashMap::with_capacity(values.len());
+        for (id, v) in values {
+            let new_val = self.apply(v.as_f64());
+            result.insert(id.clone(), ParameterValue::normalized(new_val));
+        }
+        result
     }
 }
 

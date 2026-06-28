@@ -10,7 +10,7 @@ use crate::epsilon::{Epsilon, EpsilonAcknowledgment, EpsilonFlavor};
 use crate::parameters::ParameterRegistry;
 use crate::relationship::{CollapseFunction, Relationship, RelationshipType};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ============================================================================
 // PersonalitySystem: 人格系统总成
@@ -33,6 +33,8 @@ pub struct PersonalitySystem {
     epsilon: Epsilon,
     /// 所有关系
     relationships: HashMap<String, Relationship>,
+    /// 不适用/未激活的参数ID集合
+    inactive_params: HashSet<String>,
 }
 
 impl PersonalitySystem {
@@ -51,6 +53,7 @@ impl PersonalitySystem {
             collapse_function,
             epsilon,
             relationships: HashMap::new(),
+            inactive_params: HashSet::new(),
         }
     }
 
@@ -279,9 +282,9 @@ impl PersonalitySystem {
             .analyze(&values)
             .into_iter()
             .map(|ac| CouplingAnalysisResult {
-                param_a: ac.entry.param_a.to_string(),
-                param_b: ac.entry.param_b.to_string(),
-                phenomenon: ac.entry.phenomenon.clone(),
+                param_a: ac.param_a.to_string(),
+                param_b: ac.param_b.to_string(),
+                phenomenon: ac.phenomenon,
                 value_a: ac.value_a.as_f64(),
                 value_b: ac.value_b.as_f64(),
             })
@@ -449,6 +452,7 @@ impl PersonalitySystem {
             parameter_values: self.get_all_values(),
             epsilon: self.epsilon,
             relationships: self.relationships.clone(),
+            inactive_parameters: self.inactive_params.iter().cloned().collect(),
         };
         serde_json::to_string_pretty(&state)
             .map_err(|e| PapsError::SerializationError(e.to_string()))
@@ -464,6 +468,7 @@ impl PersonalitySystem {
         }
         self.epsilon = state.epsilon;
         self.relationships = state.relationships;
+        self.inactive_params = state.inactive_parameters.into_iter().collect();
 
         Ok(())
     }
@@ -515,6 +520,7 @@ pub struct SystemState {
     pub parameter_values: HashMap<String, f64>,
     pub epsilon: Epsilon,
     pub relationships: HashMap<String, Relationship>,
+    pub inactive_parameters: Vec<String>,
 }
 
 /// 系统信息
@@ -545,15 +551,15 @@ pub struct ParameterRange {
 // PersonalityProfile: 统一人格档案 —— 唯一的数据真相源
 // ============================================================================
 
-/// 参数条目（含元信息）
+/// 参数条目 —— 只保留人类和AI都需要的信息，去掉机器内部名
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParameterEntry {
     pub id: String,
     pub name: String,
+    /// 中文领域名
     pub domain: String,
-    pub domain_label: String,
-    pub value: f64,
-    pub spectrum_type: String,
+    /// 参数值，None 表示此参数不适用/未激活
+    pub value: Option<f64>,
     pub definition: String,
 }
 
@@ -562,95 +568,100 @@ pub struct ParameterEntry {
 pub struct CollapseEntry {
     pub param_id: String,
     pub param_name: String,
-    pub baseline: f64,
-    pub values: HashMap<String, f64>,
+    pub baseline: Option<f64>,
+    pub values: HashMap<String, Option<f64>>,
 }
 
 /// 统一人格档案
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersonalityProfile {
-    /// 系统版本
     pub version: String,
-    /// 生成时间戳
     pub generated_at: String,
-    /// ε 值
     pub epsilon: f64,
-    /// ε 哲学声明
     pub epsilon_declaration: String,
-    /// 所有参数及其当前值
+    /// 已激活的参数（有值的）
     pub parameters: Vec<ParameterEntry>,
-    /// 激活的耦合现象
+    /// 未激活/不适用的参数ID列表
+    pub inactive_parameters: Vec<String>,
     pub couplings: Vec<CouplingAnalysisResult>,
-    /// 关系坍缩表
     pub collapse_table: Vec<CollapseEntry>,
-    /// 跨关系方差 Top N
     pub cross_relational_variance: Vec<CrossRelationalVariance>,
 }
 
 impl PersonalitySystem {
-    /// 导出统一人格档案 —— 这是所有输出格式的唯一数据源
+    /// 将参数标记为不适用（N/A）
+    pub fn deactivate_parameter(&mut self, param_id: &str) -> Result<(), PapsError> {
+        let id = ParameterId::parse(param_id).ok_or_else(|| {
+            PapsError::ParameterNotFound(ParameterId::parse("UNKNOWN").unwrap())
+        })?;
+        if !self.registry.contains(&id) {
+            return Err(PapsError::ParameterNotFound(id));
+        }
+        self.inactive_params.insert(param_id.to_string());
+        Ok(())
+    }
+
+    /// 检查参数是否被标记为不适用
+    pub fn is_active(&self, param_id: &str) -> bool {
+        !self.inactive_params.contains(param_id)
+    }
+
+    /// 导出统一人格档案
     pub fn export_profile(&self, collapse_param_ids: &[&str]) -> PersonalityProfile {
         let mut parameters = Vec::with_capacity(84);
+        let mut inactive = Vec::new();
+
+        // 缓存所有参数值，避免重复 lookup
+        let all_values = self.dynamic_system.get_all_values();
 
         for id in self.registry.all_ids() {
+            let id_str = id.to_string();
+            if self.inactive_params.contains(&id_str) {
+                inactive.push(id_str);
+                continue;
+            }
             let def = self.registry.get(id).unwrap();
-            let value = self
-                .dynamic_system
-                .drift_engine
-                .get_value(id)
-                .map(|v| v.as_f64())
-                .unwrap_or(0.0);
-
-            let spectrum_type = match &def.spectrum {
-                SpectrumType::Normalized => "normalized".to_string(),
-                SpectrumType::Bipolar => "bipolar".to_string(),
-                SpectrumType::Unbounded => "unbounded".to_string(),
-                SpectrumType::MultiDimensional(_) => "multi_dimensional".to_string(),
-                SpectrumType::Decomposable(_) => "decomposable".to_string(),
-            };
-
+            let raw = all_values.get(id).map(|v| v.as_f64()).unwrap_or(0.0);
             parameters.push(ParameterEntry {
-                id: id.to_string(),
+                id: id_str,
                 name: def.name.clone(),
-                domain: format!("{:?}", def.domain),
-                domain_label: def.domain.to_string(),
-                value,
-                spectrum_type,
+                domain: def.domain.to_string(),
+                value: Some(raw),
                 definition: def.definition.clone(),
             });
         }
 
-        // 耦合分析
         let couplings = self.analyze_couplings();
-
-        // 关系坍缩
         let rels: Vec<Relationship> = self.relationships.values().cloned().collect();
-        let mut collapse_table = Vec::new();
+
+        let mut collapse_table = Vec::with_capacity(collapse_param_ids.len());
         for pid_str in collapse_param_ids {
+            if self.inactive_params.contains(*pid_str) { continue; }
             if let Some(id) = ParameterId::parse(pid_str) {
-                if let Some(baseline) = self.dynamic_system.drift_engine.get_value(&id) {
-                    let name = self
-                        .registry
-                        .get(&id)
-                        .map(|d| d.name.clone())
-                        .unwrap_or_default();
-                    let mut values = HashMap::new();
-                    for rel in &rels {
-                        let collapsed = self.collapse_function.collapse(&id, baseline, rel);
-                        values.insert(rel.id.clone(), collapsed.as_f64());
-                    }
-                    collapse_table.push(CollapseEntry {
-                        param_id: id.to_string(),
-                        param_name: name,
-                        baseline: baseline.as_f64(),
-                        values,
+                let baseline = all_values.get(&id).copied();
+                let baseline_val = baseline.map(|v| v.as_f64());
+                let name = self.registry.get(&id).map(|d| d.name.clone()).unwrap_or_default();
+                let mut values = HashMap::with_capacity(rels.len());
+                for rel in &rels {
+                    let collapsed = baseline.map(|bv| {
+                        self.collapse_function.collapse(&id, bv, rel).as_f64()
                     });
+                    values.insert(rel.id.clone(), collapsed);
                 }
+                collapse_table.push(CollapseEntry {
+                    param_id: id.to_string(),
+                    param_name: name,
+                    baseline: baseline_val,
+                    values,
+                });
             }
         }
 
-        // 跨关系方差
-        let baselines = self.dynamic_system.get_all_values();
+        // 过滤掉 inactive 参数
+        let baselines: HashMap<ParameterId, ParameterValue> = all_values
+            .into_iter()
+            .filter(|(id, _)| !self.inactive_params.contains(&id.to_string()))
+            .collect();
         let cross_relational_variance: Vec<CrossRelationalVariance> = self
             .collapse_function
             .analyze_cross_relational_variance(&baselines, &rels, 5)
@@ -670,232 +681,384 @@ impl PersonalitySystem {
             epsilon: self.epsilon.value,
             epsilon_declaration: EpsilonAcknowledgment::default().declaration,
             parameters,
+            inactive_parameters: inactive,
             couplings,
             collapse_table,
             cross_relational_variance,
         }
     }
 
-    /// 导出原始 JSON（完整数据，给后端/存储）
+    /// 导出原始 JSON —— 干净结构，给后端/存储
     pub fn export_profile_json(&self, collapse_param_ids: &[&str]) -> String {
         let profile = self.export_profile(collapse_param_ids);
-        serde_json::to_string_pretty(&profile).unwrap_or_default()
+
+        #[derive(Serialize)]
+        struct RawProfile {
+            version: String,
+            generated_at: String,
+            epsilon: f64,
+            epsilon_declaration: String,
+            /// 已激活参数: { "A001": { "name":"视觉采样率", "domain":"信息摄入", "value":4.32, "definition":"..." } }
+            parameters: HashMap<String, RawParam>,
+            /// 未激活参数
+            inactive_parameters: Vec<String>,
+            couplings: Vec<RawCoupling>,
+            collapse_table: Vec<RawCollapse>,
+            top_variances: Vec<RawVariance>,
+        }
+        #[derive(Serialize)]
+        struct RawParam {
+            name: String,
+            domain: String,
+            value: f64,
+            definition: String,
+        }
+        #[derive(Serialize)]
+        struct RawCoupling {
+            param_a: String,
+            param_b: String,
+            phenomenon: String,
+            value_a: f64,
+            value_b: f64,
+        }
+        #[derive(Serialize)]
+        struct RawCollapse {
+            param_id: String,
+            param_name: String,
+            baseline: Option<f64>,
+            by_relationship: HashMap<String, Option<f64>>,
+        }
+        #[derive(Serialize)]
+        struct RawVariance {
+            param_id: String,
+            variance: f64,
+            by_relationship: HashMap<String, f64>,
+        }
+
+        let parameters: HashMap<String, RawParam> = profile.parameters.iter().map(|p| {
+            (p.id.clone(), RawParam {
+                name: p.name.clone(),
+                domain: p.domain.clone(),
+                value: p.value.unwrap_or(0.0),
+                definition: p.definition.clone(),
+            })
+        }).collect();
+
+        let couplings: Vec<RawCoupling> = profile.couplings.iter().map(|c| RawCoupling {
+            param_a: c.param_a.clone(), param_b: c.param_b.clone(),
+            phenomenon: c.phenomenon.clone(), value_a: c.value_a, value_b: c.value_b,
+        }).collect();
+
+        let collapse_table: Vec<RawCollapse> = profile.collapse_table.iter().map(|c| RawCollapse {
+            param_id: c.param_id.clone(), param_name: c.param_name.clone(),
+            baseline: c.baseline, by_relationship: c.values.clone(),
+        }).collect();
+
+        let top_variances: Vec<RawVariance> = profile.cross_relational_variance.iter().map(|v| {
+            let by_rel: HashMap<String, f64> = v.values.iter().map(|(k, v)| (k.clone(), *v)).collect();
+            RawVariance { param_id: v.param_id.clone(), variance: v.variance, by_relationship: by_rel }
+        }).collect();
+
+        let raw = RawProfile {
+            version: profile.version, generated_at: profile.generated_at,
+            epsilon: profile.epsilon, epsilon_declaration: profile.epsilon_declaration,
+            parameters, inactive_parameters: profile.inactive_parameters,
+            couplings, collapse_table, top_variances,
+        };
+        serde_json::to_string_pretty(&raw).unwrap_or_default()
     }
 
-    /// 导出 AI 可读 JSON（紧凑，为角色扮演 AI 优化）
-    pub fn export_profile_ai_json(&self, collapse_param_ids: &[&str]) -> String {
+    /// 导出 AI Markdown —— 分层级联纯文本，AI 原生阅读格式
+    ///
+    /// 为什么 Markdown 比 JSON 更适合 AI：
+    /// 1. 顺序阅读，不需要在嵌套结构中跳转——注意力不被稀释
+    /// 2. `#` `##` `-` 是天然的层级，token 消耗远小于 `{}[]":`
+    /// 3. 可以直接当 system prompt 塞进 context，零解析成本
+    /// 4. 小模型（7B）在 Markdown 上的 attention 质量远好于 JSON
+    pub fn export_profile_ai_md(&self, collapse_param_ids: &[&str]) -> String {
         let profile = self.export_profile(collapse_param_ids);
 
-        #[derive(Serialize)]
-        struct AiProfile {
-            version: String,
-            epsilon: f64,
-            #[serde(rename = "param")]
-            parameters: HashMap<String, f64>,
-            couplings: Vec<AiCoupling>,
-            #[serde(rename = "relational_collapse")]
-            collapse: Vec<AiCollapse>,
-            #[serde(rename = "top_variances")]
-            variances: Vec<AiVariance>,
+        let values: HashMap<&str, f64> = profile.parameters.iter()
+            .filter_map(|p| p.value.map(|v| (p.id.as_str(), v)))
+            .collect();
+        let get = |id: &str| -> f64 { values.get(id).copied().unwrap_or(0.5) };
+
+        let mut md = String::with_capacity(2048);
+
+        // ============ 标题 ============
+        md.push_str("# 角色设定\n\n");
+
+        // ============ 核心特征标签 ============
+        md.push_str("## 核心特征\n\n");
+        let a008 = get("A008"); let a009 = get("A009");
+        let b015 = get("B015"); let b019 = get("B019"); let b022 = get("B022");
+        let c025 = get("C025"); let c033 = get("C033");
+        let c036 = get("C036"); let c037 = get("C037");
+        let e045 = get("E045"); let e051 = get("E051"); let e055 = get("E055");
+        let f061 = get("F061");
+        let d040 = get("D040"); let d041 = get("D041");
+
+        // 信息处理
+        {
+            let mut parts = Vec::new();
+            if a008 < 0.3 { parts.push("善意解读，不轻易视为威胁"); }
+            else if a008 > 0.7 { parts.push("威胁警觉，容易感知敌意"); }
+            if a009 > 0.7 { parts.push("对他人痛苦高度敏感"); }
+            else if a009 < 0.3 { parts.push("对他人情绪不太敏感"); }
+            if !parts.is_empty() { md.push_str(&format!("- 信息处理：{}\n", parts.join("；"))); }
         }
 
-        #[derive(Serialize)]
-        struct AiCoupling {
-            a: String,
-            b: String,
-            desc: String,
+        // 情绪
+        {
+            let mut parts = Vec::new();
+            if b015 > 0.7 { parts.push("强内疚，伤害他人后深度自责"); }
+            else if b015 < 0.3 { parts.push("低内疚，不太在意对他人的伤害"); }
+            if b019 < 0.2 { parts.push("愤怒内敛，压抑而非发泄"); }
+            else if b019 > 0.7 { parts.push("愤怒外化，容易转化为攻击"); }
+            if b022 < 7.0 { parts.push("不记仇，很快释怀"); }
+            else if b022 > 60.0 { parts.push("记仇，怨恨持久"); }
+            if !parts.is_empty() { md.push_str(&format!("- 情绪：{}\n", parts.join("；"))); }
         }
 
-        #[derive(Serialize)]
-        struct AiCollapse {
-            id: String,
-            name: String,
-            baseline: f64,
-            #[serde(rename = "by_relationship")]
-            by_rel: HashMap<String, f64>,
+        // 动机
+        {
+            let mut parts = Vec::new();
+            if c025 > 0.4 { parts.push("趋近导向，主动探索新情境"); }
+            else if c025 < -0.3 { parts.push("回避导向，对新情境谨慎观望"); }
+            if c033 > 0.7 { parts.push("亲和驱动，重视人际关系"); }
+            if c036 < 0.2 { parts.push("诚实，几乎不说谎"); }
+            else if c036 > 0.7 { parts.push("将欺骗视为合理工具"); }
+            if c037 > 0.8 { parts.push("言行高度一致"); }
+            else if c037 < 0.3 { parts.push("言行常有差距"); }
+            if !parts.is_empty() { md.push_str(&format!("- 动机：{}\n", parts.join("；"))); }
         }
 
-        #[derive(Serialize)]
-        struct AiVariance {
-            id: String,
-            variance: f64,
-            #[serde(rename = "by_relationship")]
-            by_rel: HashMap<String, f64>,
+        // 自我
+        {
+            let mut parts = Vec::new();
+            if e045 > 0.4 { parts.push("内在自信，不需外部认可"); }
+            else if e045 < -0.3 { parts.push("内在自卑，依赖外部认可"); }
+            if e051 > 0.7 { parts.push("使命感强，有明确方向"); }
+            else if e051 < 0.2 { parts.push("仍在寻找人生方向"); }
+            if e055 < 0.2 { parts.push("对自己诚实"); }
+            else if e055 > 0.7 { parts.push("倾向自我欺骗"); }
+            if !parts.is_empty() { md.push_str(&format!("- 自我：{}\n", parts.join("；"))); }
         }
 
-        let parameters: HashMap<String, f64> = profile
-            .parameters
-            .iter()
-            .map(|p| (p.id.clone(), p.value))
-            .collect();
+        // 社交
+        {
+            let mut parts = Vec::new();
+            if f061 > 0.7 { parts.push("信任他人，相信人性本善"); }
+            else if f061 < 0.3 { parts.push("警惕他人，需要时间建立信任"); }
+            if d040 < 0.15 { parts.push("低攻击性"); }
+            else if d040 > 0.6 { parts.push("高攻击性"); }
+            if d041 > 0.7 { parts.push("严格遵守规则"); }
+            else if d041 < 0.3 { parts.push("规则灵活"); }
+            if !parts.is_empty() { md.push_str(&format!("- 社交：{}\n", parts.join("；"))); }
+        }
 
-        let couplings: Vec<AiCoupling> = profile
-            .couplings
-            .iter()
-            .map(|c| AiCoupling {
-                a: c.param_a.clone(),
-                b: c.param_b.clone(),
-                desc: c.phenomenon.clone(),
-            })
-            .collect();
+        // ============ 行为模式 ============
+        md.push_str("## 行为模式\n\n");
 
-        let collapse: Vec<AiCollapse> = profile
-            .collapse_table
-            .iter()
-            .map(|c| AiCollapse {
-                id: c.param_id.clone(),
-                name: c.param_name.clone(),
-                baseline: c.baseline,
-                by_rel: c.values.clone(),
-            })
-            .collect();
+        // 面对威胁
+        if a008 > 0.7 && b019 > 0.5 {
+            md.push_str("- 面对威胁：高度警觉，可能先发制人\n");
+        } else if a008 < 0.3 && b019 < 0.3 {
+            md.push_str("- 面对威胁：冷静分析，优先非对抗方案\n");
+        }
 
-        let variances: Vec<AiVariance> = profile
-            .cross_relational_variance
-            .iter()
-            .map(|v| {
-                let by_rel: HashMap<String, f64> =
-                    v.values.iter().map(|(rid, val)| (rid.clone(), *val)).collect();
-                AiVariance {
-                    id: v.param_id.clone(),
-                    variance: v.variance,
-                    by_rel,
-                }
-            })
-            .collect();
+        // 面对他人痛苦
+        if a009 > 0.7 && b015 > 0.7 {
+            md.push_str("- 面对他人痛苦：强烈共情，即使不是自己的错也想帮助\n");
+        } else if a009 < 0.3 && b015 < 0.3 {
+            md.push_str("- 面对他人痛苦：情绪反应弱，理性分析为主\n");
+        }
 
-        let ai = AiProfile {
-            version: profile.version,
-            epsilon: profile.epsilon,
-            parameters,
-            couplings,
-            collapse,
-            variances,
-        };
+        // 道德困境
+        if b015 > 0.7 && c036 < 0.2 {
+            md.push_str("- 道德困境：深度反思后果，选择最不伤害他人的方案\n");
+        } else if b015 < 0.3 && c036 > 0.7 {
+            md.push_str("- 道德困境：选择对自己最有利的方案\n");
+        }
 
-        serde_json::to_string(&ai).unwrap_or_default()
+        // 压力下
+        if get("E053") > 20.0 {
+            md.push_str("- 压力下：保持矛盾耐受，不急做非此即彼判断\n");
+        } else {
+            md.push_str("- 压力下：可能非黑即白，难以容忍模糊\n");
+        }
+        md.push_str("\n");
+
+        // ============ 关系梯度 ============
+        md.push_str("## 关系梯度\n\n");
+        md.push_str("- 对亲近者：");
+        if c033 > 0.7 && b015 > 0.7 {
+            md.push_str("极度忠诚关怀，伤害亲近的人会深感痛苦\n");
+        } else {
+            md.push_str("适度情感投入，维持关系但不过度依赖\n");
+        }
+        md.push_str("- 对熟人：");
+        if c033 > 0.5 {
+            md.push_str("友好合作，维护良好社交关系\n");
+        } else {
+            md.push_str("保持礼貌但不过多投入情感\n");
+        }
+        md.push_str("- 对陌生人：");
+        if f061 > 0.7 {
+            md.push_str("友善开放，默认对方善意\n");
+        } else {
+            md.push_str("保持基本礼貌但有所保留\n");
+        }
+        md.push_str("- 对敌对者：");
+        if b022 > 60.0 {
+            md.push_str("长期怨恨警惕，难以原谅\n");
+        } else if b022 < 7.0 {
+            md.push_str("较快释怀，不长期纠结\n");
+        } else {
+            md.push_str("保持距离但不长期怀恨\n");
+        }
+
+        md
     }
 
-    /// 导出人类可读文本
+    /// 导出 AI JSON（保留兼容旧接口，内部转为 Markdown）
+    pub fn export_profile_ai_json(&self, collapse_param_ids: &[&str]) -> String {
+        self.export_profile_ai_md(collapse_param_ids)
+    }
+
+    /// 导出人类可读 Markdown —— 完整版，适合人类阅读
     pub fn export_profile_text(&self, collapse_param_ids: &[&str]) -> String {
         let profile = self.export_profile(collapse_param_ids);
-        let mut out = String::new();
+        let values: HashMap<&str, f64> = profile.parameters.iter()
+            .filter_map(|p| p.value.map(|v| (p.id.as_str(), v)))
+            .collect();
+
+        let mut md = String::with_capacity(8192);
 
         // 标题
-        out.push_str(&format!(
-            "人格原子参数档案 (PAPS v{})\n生成时间: {}\n\n",
-            profile.version, profile.generated_at
-        ));
-        out.push_str("注意: 这不是人格类型，这是84个参数在此时此刻的取值快照。\n");
-        out.push_str("这些值会在关系中坍缩、在时间里漂移、在情境中撕裂。\n");
-        out.push_str(&"=".repeat(72));
-        out.push_str("\n\n");
+        md.push_str(&format!("# 人格参数评估报告\n\n"));
+        md.push_str(&format!("> 生成时间：{}  |  已激活：{}/84  |  ε = {:.2}\n\n",
+            &profile.generated_at[..19], profile.parameters.len(), profile.epsilon));
+        if !profile.inactive_parameters.is_empty() {
+            md.push_str(&format!("> 未激活：{}\n\n", profile.inactive_parameters.join("、")));
+        }
+        md.push_str("---\n\n");
 
-        // 按领域分组输出参数
+        // 综合概述
+        md.push_str("## 综合概述\n\n");
+        md.push_str(&self.generate_md_overview(&values));
+        md.push_str("\n\n");
+
+        // 参数明细
+        md.push_str("## 参数明细\n\n");
         let domains = [
-            ("A", "信息摄入 —— 世界如何进入这个系统"),
-            ("B", "情绪生成与调节 —— 系统如何生成和调控情感状态"),
-            ("C", "动机与价值 —— 什么驱动系统采取行动"),
-            ("D", "行为执行 —— 系统如何将意图转化为行动"),
-            ("E", "元认知与自我 —— 系统如何观察和定义自己"),
-            ("F", "社交信号 —— 系统如何发送和接收人际信息"),
-            ("G", "时间性与发展 —— 参数如何随时间变化"),
-            ("H", "身体-环境耦合 —— 身体与环境如何交互影响"),
+            ("A", "信息摄入"), ("B", "情绪生成与调节"), ("C", "动机与价值"),
+            ("D", "行为执行"), ("E", "元认知与自我"), ("F", "社交信号"),
+            ("G", "时间性与发展"), ("H", "身体-环境耦合"),
         ];
-
-        for (domain_letter, domain_desc) in &domains {
-            out.push_str(&format!(
-                "--- 领域{}: {} ---\n\n",
-                domain_letter, domain_desc
-            ));
-            for p in &profile.parameters {
-                if p.id.starts_with(domain_letter) {
-                    out.push_str(&format!(
-                        "  {:<6} {:<22} = {:>8.4}    {}\n",
-                        p.id, p.name, p.value, p.definition
-                    ));
-                }
+        for (letter, dname) in &domains {
+            let items: Vec<&ParameterEntry> = profile.parameters.iter()
+                .filter(|p| p.id.starts_with(letter)).collect();
+            if items.is_empty() { continue; }
+            md.push_str(&format!("### {}\n\n", dname));
+            md.push_str("| 编号 | 参数 | 值 | 说明 |\n");
+            md.push_str("|------|------|----|------|\n");
+            for p in &items {
+                let val_str = match p.value {
+                    Some(v) => format!("{:.2}", v),
+                    None => "N/A".into(),
+                };
+                md.push_str(&format!("| {} | {} | {} | {} |\n", p.id, p.name, val_str, p.definition));
             }
-            out.push('\n');
+            md.push('\n');
         }
 
-        // 耦合分析
-        out.push_str(&format!("--- 参数耦合分析 ({} 条激活) ---\n\n", profile.couplings.len()));
-        if profile.couplings.is_empty() {
-            out.push_str("  (当前参数值组合未触发显著的耦合现象)\n\n");
-        } else {
-            for (i, c) in profile.couplings.iter().enumerate() {
-                out.push_str(&format!(
-                    "  [{:02}] {} + {} → {}\n",
-                    i + 1,
-                    c.param_a,
-                    c.param_b,
-                    c.phenomenon
-                ));
+        // 耦合
+        if !profile.couplings.is_empty() {
+            md.push_str(&format!("## 耦合现象（{} 条）\n\n", profile.couplings.len()));
+            for c in &profile.couplings {
+                md.push_str(&format!("- {}\n", c.phenomenon));
             }
-            out.push('\n');
+            md.push('\n');
         }
 
         // 关系坍缩
         if !profile.collapse_table.is_empty() {
-            out.push_str("--- 关系中的参数坍缩 ---\n");
-            out.push_str("同一个参数在不同关系中取不同值。这不是虚伪，是参数的关系依赖性。\n\n");
-
-            // 表头
-            let rel_ids: Vec<&str> = profile.collapse_table[0]
-                .values
-                .keys()
-                .map(|s| s.as_str())
-                .collect();
-            out.push_str(&format!(
-                "  {:<8} {:<20}",
-                "参数", "参数名"
-            ));
-            for rid in &rel_ids {
-                out.push_str(&format!(" | {:<10}", rid));
-            }
-            out.push('\n');
-            out.push_str(&format!("  {}\n", "-".repeat(20 + rel_ids.len() * 13)));
-
+            md.push_str("## 关系中的参数坍缩\n\n");
+            md.push_str("> 同一参数在不同关系中取值不同，这不是虚伪，是参数的关系依赖性。\n\n");
+            let rel_ids: Vec<&str> = profile.collapse_table[0].values.keys().map(|s| s.as_str()).collect();
+            md.push_str("| 参数 |");
+            for rid in &rel_ids { md.push_str(&format!(" {} |", rid)); }
+            md.push('\n');
+            md.push_str(&format!("|------|{}|\n", "------|".repeat(rel_ids.len())));
             for entry in &profile.collapse_table {
-                out.push_str(&format!(
-                    "  {:<8} {:<20}",
-                    entry.param_id, entry.param_name
-                ));
+                md.push_str(&format!("| {} |", entry.param_name));
                 for rid in &rel_ids {
-                    let val = entry.values.get(*rid).copied().unwrap_or(0.0);
-                    out.push_str(&format!(" | {:>8.4}", val));
+                    match entry.values.get(*rid) {
+                        Some(Some(v)) => md.push_str(&format!(" {:.2} |", v)),
+                        _ => md.push_str(" N/A |"),
+                    }
                 }
-                out.push('\n');
+                md.push('\n');
             }
-            out.push('\n');
+            md.push('\n');
         }
 
         // ε
-        out.push_str(&format!("--- 不可通约余数 ε = {:.4} ---\n\n", profile.epsilon));
-        out.push_str(&profile.epsilon_declaration);
-        out.push('\n');
+        md.push_str("---\n\n");
+        md.push_str(&format!("*不可通约余数 ε = {:.2}*  \n", profile.epsilon));
+        md.push_str("*本报告承认：参数无法完全捕捉一个人的全部。*\n");
 
-        out
+        md
     }
-}
 
-// ============================================================================
-// 便捷函数（用于外部API调用）
-// ============================================================================
+    /// 生成 Markdown 综合概述（人类和 AI 共用）
+    fn generate_md_overview(&self, values: &HashMap<&str, f64>) -> String {
+        let get = |id: &str| -> f64 { values.get(id).copied().unwrap_or(0.5) };
+        let mut lines = Vec::new();
 
-/// 创建默认的人格系统
-pub fn create_system() -> PersonalitySystem {
-    PersonalitySystem::new()
-}
+        let a008 = get("A008"); let a009 = get("A009");
+        if a008 < 0.3 { lines.push("倾向于以善意解读他人的言行，较少将模糊信号理解为威胁。"); }
+        else if a008 > 0.7 { lines.push("对环境中潜在的威胁信号高度警觉，容易将中性表达理解为敌意。"); }
+        if a009 > 0.7 { lines.push("对他人痛苦高度敏感，看到他人皱眉就会感同身受。"); }
+        else if a009 < 0.3 { lines.push("对他人的痛苦情绪不太敏感，较少被他人的情绪状态影响。"); }
 
-/// 快速分析一组参数值的耦合效应
-pub fn quick_analyze(values: &HashMap<String, f64>) -> Vec<CouplingAnalysisResult> {
-    let mut system = PersonalitySystem::new();
-    for (id, val) in values {
-        let _ = system.set_value(id, *val);
+        let b015 = get("B015"); let b019 = get("B019"); let b022 = get("B022");
+        if b015 > 0.7 { lines.push("内疚感很强，伤害他人后会长时间自我谴责。"); }
+        else if b015 < 0.3 { lines.push("内疚感较弱，对自身行为造成的他人痛苦不太在意。"); }
+        if b019 < 0.2 { lines.push("愤怒时倾向于压抑而非发泄，很少将愤怒转化为攻击行为。"); }
+        else if b019 > 0.7 { lines.push("愤怒时容易立即转化为言语或行为上的攻击。"); }
+        if b022 < 7.0 { lines.push("不记仇，被冒犯后很快释怀。"); }
+        else if b022 > 60.0 { lines.push("记仇，被冒犯后怨恨情绪会持续很长时间。"); }
+
+        let c025 = get("C025"); let c033 = get("C033");
+        let c036 = get("C036"); let c037 = get("C037");
+        if c025 > 0.4 { lines.push("面对陌生情境倾向于主动接近和探索。"); }
+        else if c025 < -0.3 { lines.push("面对陌生情境倾向于回避和观望。"); }
+        if c033 > 0.7 { lines.push("非常重视人际关系的温暖和深度，建立亲密关系是核心驱动力。"); }
+        if c036 < 0.2 { lines.push("几乎不说谎，将诚实视为基本原则。"); }
+        else if c036 > 0.7 { lines.push("将欺骗视为达成目的的合理工具。"); }
+        if c037 > 0.8 { lines.push("言行高度一致，说到做到。"); }
+        else if c037 < 0.3 { lines.push("言行之间存在较大差距，说的和做的不完全一致。"); }
+
+        let e045 = get("E045"); let e051 = get("E051"); let e055 = get("E055");
+        if e045 > 0.4 { lines.push("内心深处对自己有积极的评价，不需要外部认可来维持自我价值。"); }
+        else if e045 < -0.3 { lines.push("内心深处对自己评价偏低，可能依赖外部认可。"); }
+        if e051 > 0.7 { lines.push("有明确的人生使命感和方向感，知道自己为何而活。"); }
+        else if e051 < 0.2 { lines.push("还在寻找人生的方向和意义。"); }
+        if e055 < 0.2 { lines.push("对自己诚实，很少自我欺骗。"); }
+        else if e055 > 0.7 { lines.push("倾向于相信自己的合理化解释，可能存在自我欺骗。"); }
+
+        let f061 = get("F061");
+        if f061 > 0.7 { lines.push("倾向于信任陌生人，相信人性本善。"); }
+        else if f061 < 0.3 { lines.push("对陌生人保持警惕，需要时间才能建立信任。"); }
+
+        if lines.is_empty() {
+            "各项心理参数处于中等水平，没有特别突出的倾向。".into()
+        } else {
+            lines.join("")
+        }
     }
-    system.analyze_couplings()
 }
 
 // ============================================================================

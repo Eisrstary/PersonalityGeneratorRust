@@ -78,7 +78,7 @@ impl CouplingMatrix {
             for coupling in &param.couplings {
                 let entry = CouplingEntry {
                     param_a: param.id.clone(),
-                    condition_a: ValueCondition::High, // 默认条件
+                    condition_a: ValueCondition::High,
                     param_b: coupling.parameter.clone(),
                     condition_b: coupling.condition,
                     phenomenon: coupling.phenomenon.clone(),
@@ -87,13 +87,15 @@ impl CouplingMatrix {
                 };
 
                 let idx = entries.len();
-                entries.push(entry.clone());
+                entries.push(entry);
 
-                // 索引
                 index.entry(param.id.clone()).or_default().push(idx);
                 index.entry(coupling.parameter.clone()).or_default().push(idx);
 
-                let pair = if param.id.to_string() < coupling.parameter.to_string() {
+                // 用数字比较代替字符串比较
+                let pair = if (param.id.domain, param.id.number, param.id.sub)
+                    < (coupling.parameter.domain, coupling.parameter.number, coupling.parameter.sub)
+                {
                     (param.id.clone(), coupling.parameter.clone())
                 } else {
                     (coupling.parameter.clone(), param.id.clone())
@@ -166,7 +168,9 @@ impl CouplingMatrix {
 
                 if a_matches && b_matches {
                     activated.push(ActivatedCoupling {
-                        entry: entry.clone(),
+                        param_a: entry.param_a.clone(),
+                        param_b: entry.param_b.clone(),
+                        phenomenon: entry.phenomenon.clone(),
                         value_a: *val_a,
                         value_b: *val_b,
                     });
@@ -225,10 +229,12 @@ impl CouplingMatrix {
     }
 }
 
-/// 激活的耦合关系
+/// 激活的耦合关系（引用版，避免 clone）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivatedCoupling {
-    pub entry: CouplingEntry,
+    pub param_a: ParameterId,
+    pub param_b: ParameterId,
+    pub phenomenon: String,
     pub value_a: ParameterValue,
     pub value_b: ParameterValue,
 }

@@ -34,11 +34,30 @@ fn main() {
     // 加载倾向配置，或全部随机
     if let Some(path) = tendencies_file {
         let json = fs::read_to_string(path).expect("无法读取倾向配置文件");
-        let tendencies: HashMap<String, String> =
-            serde_json::from_str(&json).expect("倾向配置 JSON 格式错误");
-        system.set_tendencies(&tendencies).expect("倾向设置失败");
+        let config: serde_json::Value = serde_json::from_str(&json).expect("倾向配置 JSON 格式错误");
+
+        // 处理倾向设置
+        if let Some(tendencies_obj) = config.get("tendencies") {
+            let tendencies: HashMap<String, String> =
+                serde_json::from_value(tendencies_obj.clone()).expect("tendencies 格式错误");
+            system.set_tendencies(&tendencies).expect("倾向设置失败");
+        } else if config.is_object() && !config.get("inactive").is_some() {
+            // 兼容旧格式：整个文件就是 tendencies map（不含 inactive 字段）
+            let tendencies: HashMap<String, String> =
+                serde_json::from_value(config.clone()).expect("倾向配置 JSON 格式错误");
+            system.set_tendencies(&tendencies).expect("倾向设置失败");
+        }
+
+        // 处理不适用参数
+        if let Some(inactive_arr) = config.get("inactive").and_then(|v| v.as_array()) {
+            for item in inactive_arr {
+                if let Some(id) = item.as_str() {
+                    system.deactivate_parameter(id).ok();
+                }
+            }
+        }
     } else {
-        // 全部 random（使用 medium 倾向）
+        // 全部 random
         let all_ids = system.all_parameter_ids();
         let mut tendencies = HashMap::new();
         for id in &all_ids {
