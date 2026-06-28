@@ -163,8 +163,8 @@ fn test_i16_exhaustion(gen: &Generator) {
 
     for i in 0i32..65536 {
         let p = gen.from_seed(i, None);
-        fingerprints.insert(p.fingerprint());
-        all_values.push(p.values());
+        fingerprints.insert(p.fingerprint().to_string());
+        all_values.push(*p.values());
     }
 
     let elapsed = start.elapsed();

@@ -104,6 +104,9 @@ impl Bias {
         self
     }
 
+    /// 获取当前偏向强度值。
+    pub fn strength_value(&self) -> f64 { self.strength }
+
     /// 从字符串解析。格式："B015=0.9,C031=-0.7,STRENGTH=0.5"
     pub fn parse(spec: &str) -> Self {
         let mut bias = Self::new();

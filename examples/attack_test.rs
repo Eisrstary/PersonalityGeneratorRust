@@ -537,7 +537,7 @@ fn attack_generate_collision(gen: &Generator) {
     for _ in 0..CALLS {
         let batch = gen.generate(BATCH_SIZE, None);
         for p in &batch {
-            if !all_fingerprints.insert(p.fingerprint().clone()) {
+            if !all_fingerprints.insert(p.fingerprint().to_string()) {
                 collisions += 1;
             }
             total_generated += 1;
@@ -651,7 +651,7 @@ fn attack_fuzz_all_apis(gen: &Generator) {
 
     // from_hex 模糊
     let hex_cases = [
-        Seed::from_i32(42).to_hex(),
+        Seed::from_i32(42).to_string(),
         "AA".repeat(1024),
         "00".repeat(1024),
         "FF".repeat(1024),
@@ -686,7 +686,7 @@ fn attack_fuzz_all_apis(gen: &Generator) {
     let mut seed = Seed::from_i32(42);
     seed.reset();
     for _ in 0..200 { let _ = seed.read_f64(); let _ = seed.read_f32(); let _ = seed.read_bit(); }
-    let _ = seed.to_hex();
+    let _ = seed.to_string();
     let _ = seed.as_bytes();
 
     println!("  测试用例数:   50+");

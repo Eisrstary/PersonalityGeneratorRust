@@ -207,7 +207,7 @@ fn test_seed_roundtrip() {
 
     for seed_val in &[0, 1, -1, 42, 1234567890, i32::MAX, i32::MIN] {
         let seed = Seed::from_i32(*seed_val);
-        let hex = seed.to_hex();
+        let hex = seed.to_string();
 
         // hex 长度必须是 2048
         assert_eq!(hex.len(), 2048, "种子 {} hex 长度错误", seed_val);
@@ -305,31 +305,31 @@ fn test_missing_rate(gen: &Generator) {
 fn test_bias_parsing() {
     // 空字符串
     let b = Bias::parse("");
-    assert_eq!(b.strength(), 0.7); // 默认值
+    assert_eq!(b.strength_value(), 0.7); // 默认值
 
     // 单个参数
     let b = Bias::parse("B015=0.9");
-    assert_eq!(b.strength(), 0.7);
+    assert_eq!(b.strength_value(), 0.7);
 
     // 完整格式
     let b = Bias::parse("B015=0.9,C031=-0.7,STRENGTH=0.5");
-    assert_eq!(b.strength(), 0.5);
+    assert_eq!(b.strength_value(), 0.5);
 
     // 领域 + 参数混合
     let b = Bias::parse("A=0.8;B015=0.3;S=0.6");
-    assert_eq!(b.strength(), 0.6);
+    assert_eq!(b.strength_value(), 0.6);
 
     // 非法值被忽略
     let b = Bias::parse("B015=abc,XXX=0.5");
-    assert_eq!(b.strength(), 0.7);
+    assert_eq!(b.strength_value(), 0.7);
 
     // 越界值被裁剪
     let b = Bias::parse("B015=999,STRENGTH=-5");
-    assert_eq!(b.strength(), 0.0); // clamp 到 [0,1]
+    assert_eq!(b.strength_value(), 0.0); // clamp 到 [0,1]
 
     // 分号分隔
     let b = Bias::parse("C025=0.5;D040=0.3;STR=0.8");
-    assert_eq!(b.strength(), 0.8);
+    assert_eq!(b.strength_value(), 0.8);
 
     println!("  ✅ Bias 解析全部通过");
 }
