@@ -1,0 +1,15 @@
+{
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+    "terminal.integrated.profiles.windows": {
+        "PowerShell": {
+            "source": "PowerShell",
+            "args": ["-NoLogo"]
+        }
+    },
+    // Rust cargo 输出到 stderr 导致 PowerShell 全红
+    // 解决方案：强制 cargo 使用彩色输出 + 合并 stderr 到 stdout
+    "rust-analyzer.check.extraArgs": ["--color=always"],
+    "rust-analyzer.cargo.buildScripts.extraArgs": ["--color=always"],
+    "rust-analyzer.cargo.extraArgs": ["--color=always"]
+}
+

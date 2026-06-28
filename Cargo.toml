@@ -18,3 +18,7 @@ path = "examples/demo.rs"
 [[example]]
 name = "stress_test"
 path = "examples/stress_test.rs"
+
+[[example]]
+name = "collision_test"
+path = "examples/collision_test.rs"
