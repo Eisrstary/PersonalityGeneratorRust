@@ -1,0 +1,16 @@
+[package]
+name = "personality_generator"
+version = "0.1.0"
+edition = "2021"
+description = "人格原子参数系统 (PAPS) —— 无原型·纯参数·全光谱"
+license = "MIT"
+
+[dependencies]
+
+[lib]
+name = "personality_generator"
+path = "src/lib.rs"
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"
