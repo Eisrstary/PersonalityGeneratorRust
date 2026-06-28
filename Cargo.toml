@@ -1,0 +1,80 @@
+[package]
+name = "personality_generator"
+version = "0.1.0"
+edition = "2021"
+description = "Personality Atomic Parameter System (PAPS) - A non-archetypal, pure-parameter, full-spectrum personality parameter system"
+license = "MIT"
+authors = ["PAPS Contributors"]
+
+[lib]
+name = "personality_generator"
+crate-type = ["lib", "cdylib", "rlib"]
+
+[[bin]]
+name = "paps-cli"
+path = "src/bin/cli.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["clap"]
+ffi-export = []
+
+[dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Math / random
+rand = "0.8"
+rand_distr = "0.4"
+nalgebra = "0.33"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "2"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# CLI (optional)
+clap = { version = "4", features = ["derive"], optional = true }
+
+# WASM support
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+
+# FFI support
+libc = "0.2"
+
+# SmallVec for stack-optimized collections
+smallvec = "1"
+
+# Hash
+fnv = "1"
+ahash = "0.8"
+once_cell = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "0.2" }
+js-sys = "0.3"
+serde-wasm-bindgen = "0.6"
+
+[dev-dependencies]
+criterion = "0.5"
+proptest = "1"
+
+[[bench]]
+name = "parameter_benchmarks"
+harness = false
+path = "benches/parameter_benchmarks.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

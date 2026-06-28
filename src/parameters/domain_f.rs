@@ -1,0 +1,131 @@
+//! 领域F: 社交信号 (F056-F062)
+//! 系统如何发送和接收人际信息
+
+use crate::core::*;
+use super::*;
+
+pub fn domain_f_parameters() -> Vec<ParameterDefinition> {
+    vec![
+        ParameterDefinition {
+            id: ParameterId::parse("F056").unwrap(),
+            name: "面部镜像延迟".into(),
+            domain: ParameterDomain::SocialSignal,
+            definition: "对方表情出现后自身对应肌肉激活的时间延迟".into(),
+            spectrum: SpectrumType::Unbounded,
+            spectrum_labels: ("对方笑=瞬间同步(0ms)".into(), "对方笑=无反应(∞ms)".into()),
+            granularity: ParameterGranularity::Decomposable(vec!["F056a".into(), "F056b".into()]),
+            couplings: vec![
+                CouplingDescription { parameter: ParameterId::parse("A009b").unwrap(), condition: ValueCondition::Low, phenomenon: "对外群体无镜像+低痛苦敏感=完全隔离".into() },
+                CouplingDescription { parameter: ParameterId::parse("B021a").unwrap(), condition: ValueCondition::High, phenomenon: "对内群体快速镜像+高传染=深度共情同步".into() },
+            ],
+            collapses: vec![CollapseCondition { trigger: "威胁情境".into(), direction: CollapseDirection::LowToHigh, description: "F056b可能从快速跳变到∞".into() }],
+            drifts: vec![],
+            reversals: vec![],
+            default_value: ParameterValue::unbounded(200.0),
+        },
+        ParameterDefinition {
+            id: ParameterId::parse("F057").unwrap(),
+            name: "自我暴露深度梯度".into(),
+            domain: ParameterDomain::SocialSignal,
+            definition: "第N次见面时愿意暴露的个人信息深度".into(),
+            spectrum: SpectrumType::Normalized,
+            spectrum_labels: ("初次见面=全盘托出(0)".into(), "十年好友=仍设防(100%)".into()),
+            granularity: ParameterGranularity::Decomposable(vec!["F057a".into(), "F057b".into()]),
+            couplings: vec![
+                CouplingDescription { parameter: ParameterId::parse("C033").unwrap(), condition: ValueCondition::High, phenomenon: "快速暴露+高亲和=快速建立亲密关系".into() },
+                CouplingDescription { parameter: ParameterId::parse("B017").unwrap(), condition: ValueCondition::Low, phenomenon: "快速暴露+低羞耻=无边界型".into() },
+            ],
+            collapses: vec![CollapseCondition { trigger: "被暴露对象背叛".into(), direction: CollapseDirection::LowToHigh, description: "F057可能从低跳变到极高".into() }],
+            drifts: vec![DriftPattern { description: "随信任建立缓慢下降".into(), direction: DriftDirection::Decreasing, rate_category: DriftRate::Slow }],
+            reversals: vec![],
+            default_value: ParameterValue::normalized(0.7),
+        },
+        ParameterDefinition {
+            id: ParameterId::parse("F058").unwrap(),
+            name: "社交代价敏感度".into(),
+            domain: ParameterDomain::SocialSignal,
+            definition: "系统在拒绝/反对他人前脑内模拟对方反应的强度和数量".into(),
+            spectrum: SpectrumType::Normalized,
+            spectrum_labels: ("说\"不\"=轻松(0)".into(), "说\"不\"前模拟N种反应(∞)".into()),
+            granularity: ParameterGranularity::Decomposable(vec!["F058a".into(), "F058b".into(), "F058c".into()]),
+            couplings: vec![
+                CouplingDescription { parameter: ParameterId::parse("C028").unwrap(), condition: ValueCondition::High, phenomenon: "高代价敏感+高自主性=想说\"不\"但不敢(内心冲突)".into() },
+                CouplingDescription { parameter: ParameterId::parse("A009").unwrap(), condition: ValueCondition::Low, phenomenon: "低代价敏感+低痛苦敏感=拒绝他人毫无压力".into() },
+            ],
+            collapses: vec![],
+            drifts: vec![DriftPattern { description: "社会地位上升时F058a通常下降".into(), direction: DriftDirection::Decreasing, rate_category: DriftRate::Slow }],
+            reversals: vec![],
+            default_value: ParameterValue::normalized(0.5),
+        },
+        ParameterDefinition {
+            id: ParameterId::parse("F059").unwrap(),
+            name: "欺骗生理舒适度".into(),
+            domain: ParameterDomain::SocialSignal,
+            definition: "系统说谎时自主神经系统的激活程度(反向：越舒适=越不激活)".into(),
+            spectrum: SpectrumType::Normalized,
+            spectrum_labels: ("说谎=心跳加速/出汗(0)".into(), "说谎=心率完全平稳(1)".into()),
+            granularity: ParameterGranularity::Decomposable(vec!["F059a".into(), "F059b".into()]),
+            couplings: vec![
+                CouplingDescription { parameter: ParameterId::parse("C036").unwrap(), condition: ValueCondition::High, phenomenon: "高舒适+高欺骗接受=天生的说谎者".into() },
+                CouplingDescription { parameter: ParameterId::parse("C036").unwrap(), condition: ValueCondition::High, phenomenon: "低舒适+高欺骗接受=边说谎边身体出卖自己".into() },
+            ],
+            collapses: vec![],
+            drifts: vec![DriftPattern { description: "反复说谎后F059通常上升(习惯化)".into(), direction: DriftDirection::Increasing, rate_category: DriftRate::Moderate }],
+            reversals: vec![],
+            default_value: ParameterValue::normalized(0.4),
+        },
+        ParameterDefinition {
+            id: ParameterId::parse("F060").unwrap(),
+            name: "印象管理精细度".into(),
+            domain: ParameterDomain::SocialSignal,
+            definition: "系统刻意控制他人对自己印象的策略复杂程度".into(),
+            spectrum: SpectrumType::Normalized,
+            spectrum_labels: ("不在乎形象(0)".into(), "精心设计每一面(1)".into()),
+            granularity: ParameterGranularity::Decomposable(vec!["F060a".into(), "F060b".into(), "F060c".into()]),
+            couplings: vec![
+                CouplingDescription { parameter: ParameterId::parse("E055").unwrap(), condition: ValueCondition::High, phenomenon: "高管理+高自我欺骗=真诚地相信自己的表演".into() },
+            ],
+            collapses: vec![CollapseCondition { trigger: "印象崩溃(被揭穿)".into(), direction: CollapseDirection::Variable, description: "F060可能跳变".into() }],
+            drifts: vec![DriftPattern { description: "在需要频繁社交表演的环境中F060通常上升".into(), direction: DriftDirection::Increasing, rate_category: DriftRate::Slow }],
+            reversals: vec![],
+            default_value: ParameterValue::normalized(0.5),
+        },
+        ParameterDefinition {
+            id: ParameterId::parse("F061").unwrap(),
+            name: "信任默认值".into(),
+            domain: ParameterDomain::SocialSignal,
+            definition: "系统在未经验证前对陌生人的初始信任水平".into(),
+            spectrum: SpectrumType::Normalized,
+            spectrum_labels: ("陌生人=敌人(0)".into(), "陌生人=朋友(1)".into()),
+            granularity: ParameterGranularity::Decomposable(vec!["F061a".into(), "F061b".into()]),
+            couplings: vec![
+                CouplingDescription { parameter: ParameterId::parse("A008").unwrap(), condition: ValueCondition::High, phenomenon: "低信任+高威胁放大=偏执型".into() },
+                CouplingDescription { parameter: ParameterId::parse("A008").unwrap(), condition: ValueCondition::Low, phenomenon: "高信任+低威胁放大=天真型".into() },
+            ],
+            collapses: vec![CollapseCondition { trigger: "被陌生人严重伤害".into(), direction: CollapseDirection::HighToLow, description: "F061可能从高跳变到低".into() }],
+            drifts: vec![
+                DriftPattern { description: "在安全环境中F061缓慢上升".into(), direction: DriftDirection::Increasing, rate_category: DriftRate::Slow },
+                DriftPattern { description: "在危险环境中缓慢下降".into(), direction: DriftDirection::Decreasing, rate_category: DriftRate::Slow },
+            ],
+            reversals: vec![],
+            default_value: ParameterValue::normalized(0.5),
+        },
+        ParameterDefinition {
+            id: ParameterId::parse("F062").unwrap(),
+            name: "背叛检测灵敏度".into(),
+            domain: ParameterDomain::SocialSignal,
+            definition: "系统识别欺骗/利用/背叛线索的警觉程度".into(),
+            spectrum: SpectrumType::Normalized,
+            spectrum_labels: ("利用=看不见(0)".into(), "蛛丝马迹=警觉(1)".into()),
+            granularity: ParameterGranularity::Atomic,
+            couplings: vec![
+                CouplingDescription { parameter: ParameterId::parse("A008").unwrap(), condition: ValueCondition::High, phenomenon: "高背叛检测+高威胁放大=偏执型警觉".into() },
+                CouplingDescription { parameter: ParameterId::parse("B022").unwrap(), condition: ValueCondition::High, phenomenon: "高背叛检测+高怨恨=一次背叛终身铭记".into() },
+            ],
+            collapses: vec![CollapseCondition { trigger: "被严重背叛".into(), direction: CollapseDirection::LowToHigh, description: "F062可能从低跳变到极高".into() }],
+            drifts: vec![],
+            reversals: vec![],
+            default_value: ParameterValue::normalized(0.4),
+        },
+    ]
+}
