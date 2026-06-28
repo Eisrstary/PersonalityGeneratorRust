@@ -113,7 +113,7 @@ impl Bias {
             let mut kv = part.splitn(2, '=');
             let key = kv.next().unwrap_or("").trim().to_uppercase();
             let val_str = kv.next().unwrap_or("").trim();
-            let val: f64 = match val_str.parse() {
+            let val: f64 = match val_str.parse::<f64>() {
                 Ok(v) if v.is_finite() => v,
                 _ => continue,
             };
