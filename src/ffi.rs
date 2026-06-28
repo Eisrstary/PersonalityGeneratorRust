@@ -78,17 +78,26 @@ pub extern "C" fn pg_generate_from_hex(hex: *const c_char, bias: *const c_char) 
 
 /// 批量生成。
 ///
-/// 返回的人格数组布局：[handle_count, handle_0, handle_1, ...]
-/// 调用方通过 `pg_free_batch()` 释放。
+/// 返回的布局：[[count: usize], handle_0, handle_1, ...]
+/// 前 `size_of::<usize>()` 字节存储数量，之后是人格句柄数组。
+/// 调用方通过 `pg_free_batch()` 释放。count=0 时返回 NULL。
 #[no_mangle]
 pub extern "C" fn pg_generate_batch(count: i32, bias: *const c_char) -> *mut *mut Personality {
+    let count = count.max(0) as usize;
+    if count == 0 { return std::ptr::null_mut(); }
     let bias_str = unsafe { cstr_to_str(bias) };
-    let batch = Generator::generate(count.max(0) as usize, bias_str);
-    let mut handles: Vec<*mut Personality> = batch.into_iter().map(|p| Box::into_raw(Box::new(p))).collect();
-    handles.insert(0, handles.len() as *mut Personality); // 第一个元素存长度
-    let ptr = handles.as_mut_ptr();
-    std::mem::forget(handles);
-    ptr
+    let batch = Generator::generate(count, bias_str);
+    // 布局： [usize count] [handle_0] [handle_1] ...
+    let total_bytes = std::mem::size_of::<usize>() + count * std::mem::size_of::<*mut Personality>();
+    let layout = std::alloc::Layout::from_size_align(total_bytes, std::mem::align_of::<usize>()).unwrap();
+    let ptr = unsafe { std::alloc::alloc(layout) as *mut usize };
+    if ptr.is_null() { return std::ptr::null_mut(); }
+    unsafe { *ptr = count; }
+    let handles_ptr = unsafe { (ptr.add(1)) as *mut *mut Personality };
+    for (i, p) in batch.into_iter().enumerate() {
+        unsafe { *handles_ptr.add(i) = Box::into_raw(Box::new(p)); }
+    }
+    handles_ptr
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -182,11 +191,16 @@ pub extern "C" fn pg_free_personality(handle: *mut Personality) {
 #[no_mangle]
 pub extern "C" fn pg_free_batch(handles: *mut *mut Personality) {
     if handles.is_null() { return; }
-    let count = unsafe { *handles } as usize;
-    for i in 1..=count {
+    // 布局: [usize count] [handle_0] [handle_1] ...
+    let count_ptr = unsafe { (handles as *mut usize).sub(1) };
+    let count = unsafe { *count_ptr };
+    for i in 0..count {
         unsafe { pg_free_personality(*handles.add(i)); }
     }
-    unsafe { drop(Box::from_raw(handles)); }
+    // 释放整块内存
+    let total_bytes = std::mem::size_of::<usize>() + count * std::mem::size_of::<*mut Personality>();
+    let layout = std::alloc::Layout::from_size_align(total_bytes, std::mem::align_of::<usize>()).unwrap();
+    unsafe { std::alloc::dealloc(count_ptr as *mut u8, layout); }
 }
 
 /// 释放字符串。

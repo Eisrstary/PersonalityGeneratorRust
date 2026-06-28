@@ -86,8 +86,9 @@ impl Generator {
     pub fn generate(count: usize, bias: Option<&str>) -> Vec<Personality> {
         let bias = Bias::parse(bias.unwrap_or(""));
         let mut tmp = crate::seed::random_seed();
-        let base_i32 = tmp.read_f32().map(|v| (v * i32::MAX as f32) as i32).unwrap_or(0);
-        (0..count).map(|i| Self::generate_one(&mut Seed::from_i32(base_i32.wrapping_add(i as i32)), &bias)).collect()
+        // 用种子前 4 字节作为 u32 基础，避免 f32 精度损失
+        let base = tmp.read_f32().map(|v| (v * u32::MAX as f32) as u32).unwrap_or(0);
+        (0..count).map(|i| Self::generate_one(&mut Seed::from_i32(base.wrapping_add(i as u32) as i32), &bias)).collect()
     }
 
     #[inline] pub fn from_seed(seed: i32, bias: Option<&str>) -> Personality { Self::generate_one(&mut Seed::from_i32(seed), &Bias::parse(bias.unwrap_or(""))) }
@@ -135,7 +136,8 @@ fn fingerprint(values: &[f64; PARAM_COUNT], missing: &[bool; PARAM_COUNT]) -> St
         if n >= 4 { break; }
         if !missing[i] {
             if n > 0 { s.push('|'); }
-            let _ = std::fmt::write(&mut s, format_args!("{:.4}", values[i]));
+            use std::fmt::Write;
+            write!(s, "{:.4}", values[i]).expect("写入 String 不应失败");
             n += 1;
         }
     }

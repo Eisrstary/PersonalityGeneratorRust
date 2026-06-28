@@ -201,15 +201,18 @@ fn hex_nibble(c: u8) -> Option<u8> {
     }
 }
 
-/// 生成非确定性随机种子。
+/// 生成非确定性随机种子（混合 nanosecond + microsecond 精度）。
 #[cfg(not(target_arch = "wasm32"))]
 pub fn random_seed() -> Seed {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let n = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    Seed::from_i32((n.wrapping_mul(1_103_515_245).wrapping_add(n >> 13)) as i32)
+    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    // 混合秒、毫秒、纳秒，产生更好的熵分布
+    let mixed = (d.as_secs() as u32)
+        .wrapping_mul(1_103_515_245)
+        .wrapping_add(d.subsec_millis())
+        .wrapping_mul(1_103_515_245)
+        .wrapping_add(d.subsec_nanos());
+    Seed::from_i32(mixed as i32)
 }
 
 #[cfg(target_arch = "wasm32")]
