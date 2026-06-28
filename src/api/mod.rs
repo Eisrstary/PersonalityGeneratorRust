@@ -9,7 +9,6 @@ use crate::dynamics::{DynamicSystem, PhaseChangeType};
 use crate::epsilon::{Epsilon, EpsilonAcknowledgment, EpsilonFlavor};
 use crate::parameters::ParameterRegistry;
 use crate::relationship::{CollapseFunction, Relationship, RelationshipType};
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
