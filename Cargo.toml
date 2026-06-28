@@ -26,3 +26,11 @@ path = "examples/collision_test.rs"
 [[example]]
 name = "extreme_test"
 path = "examples/extreme_test.rs"
+
+[[example]]
+name = "deep_test"
+path = "examples/deep_test.rs"
+
+[[example]]
+name = "attack_test"
+path = "examples/attack_test.rs"
