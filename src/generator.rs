@@ -63,7 +63,7 @@ impl Personality {
 /// ```ignore
 /// Bias::new().set("B015", 0.9).set_domain(Domain::Emotion, 0.5).strength(0.7)
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Bias {
     biases: [f64; PARAM_COUNT],
     strength: f64,
@@ -137,6 +137,7 @@ impl Bias {
 // ═══════════════════════════════════════════════════════════════
 
 pub struct Generator {
+    #[allow(dead_code)]
     id_to_idx: HashMap<&'static str, usize>,
 }
 

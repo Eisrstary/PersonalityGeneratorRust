@@ -11,7 +11,7 @@
 //!   8. 浮点精度极限
 
 use personality_generator::{Generator, Seed};
-use personality_generator::params::ALL_PARAMS;
+use personality_generator::params::PARAMS;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -71,11 +71,11 @@ fn test_fingerprint_collision(gen: &Generator) {
     let mut collisions = 0u64;
 
     for i in 0..N {
-        let p = gen.generate_from_seed(i as i32, None);
-        if seen.contains_key(&p.fingerprint) {
+        let p = gen.from_seed(i as i32, None);
+        if seen.contains_key(&p.fingerprint().to_string()) {
             collisions += 1;
         }
-        seen.insert(p.fingerprint, ());
+        seen.insert(p.fingerprint().to_string(), ());
     }
     let elapsed = start.elapsed();
 
@@ -120,8 +120,8 @@ fn test_chi_squared(gen: &Generator) {
         let mut count = 0usize;
 
         for p in &batch {
-            if !p.missing[param_idx] {
-                let bin = (p.values[param_idx] * BINS as f64) as usize;
+            if !p.missing()[param_idx] {
+                let bin = (p.values()[param_idx] * BINS as f64) as usize;
                 let bin = bin.min(BINS - 1);
                 bins[bin] += 1;
                 count += 1;
@@ -210,8 +210,8 @@ fn test_parameter_independence(gen: &Generator) {
 
 fn pearson_correlation(batch: &[personality_generator::Personality], a: usize, b: usize) -> f64 {
     let pairs: Vec<(f64, f64)> = batch.iter()
-        .filter(|p| !p.missing[a] && !p.missing[b])
-        .map(|p| (p.values[a], p.values[b]))
+        .filter(|p| !p.missing()[a] && !p.missing()[b])
+        .map(|p| (p.values()[a], p.values()[b]))
         .collect();
 
     if pairs.len() < 100 {
@@ -245,7 +245,7 @@ fn test_bipolar_symmetry(gen: &Generator) {
     let batch = gen.generate(N, None);
 
     // 找出所有双极参数
-    let bipolar_indices: Vec<(usize, &str)> = ALL_PARAMS.iter()
+    let bipolar_indices: Vec<(usize, &str)> = PARAMS.iter()
         .enumerate()
         .filter(|(_, p)| p.bipolar)
         .map(|(i, p)| (i, p.id))
@@ -255,8 +255,8 @@ fn test_bipolar_symmetry(gen: &Generator) {
 
     for &(idx, id) in &bipolar_indices {
         let values: Vec<f64> = batch.iter()
-            .filter(|p| !p.missing[idx])
-            .map(|p| p.values[idx])
+            .filter(|p| !p.missing()[idx])
+            .map(|p| p.values()[idx])
             .collect();
 
         if values.len() < 1000 {
@@ -276,8 +276,8 @@ fn test_bipolar_symmetry(gen: &Generator) {
     let all_means: Vec<f64> = bipolar_indices.iter()
         .map(|&(idx, _)| {
             let vals: Vec<f64> = batch.iter()
-                .filter(|p| !p.missing[idx])
-                .map(|p| p.values[idx])
+                .filter(|p| !p.missing()[idx])
+                .map(|p| p.values()[idx])
                 .collect();
             if vals.is_empty() { 0.5 } else { vals.iter().sum::<f64>() / vals.len() as f64 }
         })
@@ -305,7 +305,7 @@ fn test_missing_pattern_entropy(gen: &Generator) {
     let mut param_missing = [0usize; 84];
     for p in &batch {
         for i in 0..84 {
-            if p.missing[i] {
+            if p.missing()[i] {
                 param_missing[i] += 1;
             }
         }
@@ -360,7 +360,7 @@ fn test_sequential_seed_correlation(gen: &Generator) {
 
     // 生成连续种子的人格
     let batch: Vec<_> = (0..N)
-        .map(|i| gen.generate_from_seed(i as i32, None))
+        .map(|i| gen.from_seed(i as i32, None))
         .collect();
 
     // 检查相邻种子的参数是否高度相关（不应该）
@@ -373,8 +373,8 @@ fn test_sequential_seed_correlation(gen: &Generator) {
 
     for &pi in &sample_params {
         let vals: Vec<f64> = batch.iter()
-            .filter(|p| !p.missing[pi])
-            .map(|p| p.values[pi])
+            .filter(|p| !p.missing()[pi])
+            .map(|p| p.values()[pi])
             .collect();
 
         if vals.len() < 100 {
@@ -427,15 +427,15 @@ fn test_bias_boundaries(gen: &Generator) {
 
     for p in &batch_high {
         for i in 0..84 {
-            if !p.missing[i] && !ALL_PARAMS[i].bipolar {
-                if p.values[i] < 0.4 {
+            if !p.missing()[i] && !PARAMS[i].bipolar {
+                if p.values()[i] < 0.4 {
                     non_bipolar_high_violations += 1;
                 }
             }
         }
     }
 
-    let total_non_bipolar = batch_high.len() * ALL_PARAMS.iter().filter(|p| !p.bipolar).count();
+    let total_non_bipolar = batch_high.len() * PARAMS.iter().filter(|p| !p.bipolar).count();
     let violation_rate = non_bipolar_high_violations as f64 / total_non_bipolar as f64;
 
     println!("  全高偏向样本: {:>8}", N);
@@ -453,8 +453,8 @@ fn test_bias_boundaries(gen: &Generator) {
 
     for p in &batch_low {
         for i in 0..84 {
-            if !p.missing[i] && !ALL_PARAMS[i].bipolar {
-                if p.values[i] > 0.6 {
+            if !p.missing()[i] && !PARAMS[i].bipolar {
+                if p.values()[i] > 0.6 {
                     non_bipolar_low_violations += 1;
                 }
             }
@@ -477,13 +477,13 @@ fn test_bias_boundaries(gen: &Generator) {
 
 fn test_fingerprint_precision(gen: &Generator) {
     // 验证指纹格式："0.XXXX|0.XXXX|0.XXXX|0.XXXX"
-    let p = gen.generate_from_seed(42, None);
+    let p = gen.from_seed(42, None);
 
-    println!("  示例指纹: {}", p.fingerprint);
+    println!("  示例指纹: {}", p.fingerprint());
 
     // 解析指纹
-    if p.fingerprint != "ALL_MISSING" {
-        let parts: Vec<&str> = p.fingerprint.split('|').collect();
+    if p.fingerprint() != "ALL_MISSING" {
+        let parts: Vec<&str> = p.fingerprint().split('|').collect();
         assert!(parts.len() <= 4, "指纹格式错误");
 
         for part in &parts {
@@ -496,23 +496,23 @@ fn test_fingerprint_precision(gen: &Generator) {
     }
 
     // 验证同一指纹在不同操作后不变
-    let fp1 = p.fingerprint.clone();
+    let fp1 = p.fingerprint().clone();
     let _ = p.get("A001");
     let _ = p.missing_count();
-    assert_eq!(p.fingerprint, fp1, "指纹在只读操作后发生了变化");
+    assert_eq!(p.fingerprint(), fp1, "指纹在只读操作后发生了变化");
 
     // 验证值的浮点精度
-    for (i, &v) in p.values.iter().enumerate() {
-        if !p.missing[i] {
-            assert!(v.is_finite(), "参数 {} 值非有限: {}", ALL_PARAMS[i].id, v);
-            assert!(!v.is_nan(), "参数 {} 值为 NaN", ALL_PARAMS[i].id);
-            assert!(!v.is_infinite(), "参数 {} 值为无穷", ALL_PARAMS[i].id);
+    for (i, &v) in p.values().iter().enumerate() {
+        if !p.missing()[i] {
+            assert!(v.is_finite(), "参数 {} 值非有限: {}", PARAMS[i].id, v);
+            assert!(!v.is_nan(), "参数 {} 值为 NaN", PARAMS[i].id);
+            assert!(!v.is_infinite(), "参数 {} 值为无穷", PARAMS[i].id);
         }
     }
 
     // 种子耗尽后应优雅降级
     // 构造一个极短种子：手动设置 pos 到接近末尾
-    let mut seed = Seed::from_int(1);
+    let mut seed = Seed::from_i32(1);
     seed.reset();
     // 快速消耗种子：1024 / 8 = 128 个 f64
     for _ in 0..128 {

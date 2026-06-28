@@ -13,7 +13,7 @@
 //!  10. 信息泄露攻击 —— 从输出反推种子
 
 use personality_generator::{Generator, Seed, Bias};
-use personality_generator::params::ALL_PARAMS;
+use personality_generator::params::PARAMS;
 use std::collections::{HashSet, HashMap};
 
 fn main() {
@@ -80,7 +80,7 @@ fn attack_seed_exhaustion(gen: &Generator) {
     // 84×12 = 1008，余 16 字节。安全。
 
     // 攻击1：实际测量每个种子的字节消耗
-    let mut seed = Seed::from_int(12345);
+    let mut seed = Seed::from_i32(12345);
     seed.reset();
 
     let mut bytes_consumed = 0usize;
@@ -103,7 +103,7 @@ fn attack_seed_exhaustion(gen: &Generator) {
             break;
         }
 
-        let f64_result = if ALL_PARAMS[i].bipolar {
+        let f64_result = if PARAMS[i].bipolar {
             seed.read_f64()
         } else {
             seed.read_f64()
@@ -132,7 +132,7 @@ fn attack_seed_exhaustion(gen: &Generator) {
     assert!(bytes_consumed <= 1024, "种子溢出！消耗 {} > 1024", bytes_consumed);
 
     // 攻击3：验证耗尽后 generate_one 的行为
-    let p = gen.generate_from_seed(12345, None);
+    let p = gen.from_seed(12345, None);
     let missing_count = p.missing_count();
     // 种子耗尽后的参数应标记为缺失
     // 1024/12 = 85.3，所以 84 个参数理论上不会耗尽
@@ -154,14 +154,14 @@ fn attack_fingerprint_collision(gen: &Generator) {
     let mut fp_collisions: HashMap<String, Vec<i32>> = HashMap::new();
 
     for seed in 0..N as i32 {
-        let p = gen.generate_from_seed(seed, None);
-        let fp = &p.fingerprint;
+        let p = gen.from_seed(seed, None);
+        let fp = &p.fingerprint();
 
-        if fp == "ALL_MISSING" {
+        if *fp == "ALL_MISSING" {
             all_missing_count += 1;
         }
 
-        fp_collisions.entry(fp.clone())
+        fp_collisions.entry(fp.to_string())
             .or_default()
             .push(seed);
     }
@@ -208,7 +208,7 @@ fn attack_bipolar_boundary(gen: &Generator) {
     // raw ∈ [min, max], bipolar 时 raw=0 → values=0.5
     // raw = min → values=0, raw = max → values=1
 
-    let bipolar_params: Vec<usize> = ALL_PARAMS.iter()
+    let bipolar_params: Vec<usize> = PARAMS.iter()
         .enumerate()
         .filter(|(_, p)| p.bipolar)
         .map(|(i, _)| i)
@@ -218,47 +218,47 @@ fn attack_bipolar_boundary(gen: &Generator) {
 
     // 攻击1：bias 拉向 -1 和 +1 时，归一化值是否到达 0 和 1？
     for &idx in &bipolar_params {
-        let id = ALL_PARAMS[idx].id;
-        let def = &ALL_PARAMS[idx];
+        let id = PARAMS[idx].id;
+        let def = &PARAMS[idx];
 
         // 拉向 -1（对应 raw=min）
-        let p_low = gen.generate_from_seed(42,
+        let p_low = gen.from_seed(42,
             Some(&format!("{}=1.0,STRENGTH=1.0", id)));
         // 拉向 +1（对应 raw=max）
-        let p_high = gen.generate_from_seed(42,
+        let p_high = gen.from_seed(42,
             Some(&format!("{}=-1.0,STRENGTH=1.0", id)));
 
-        if !p_low.missing[idx] {
-            let _raw_low = def.min + p_low.values[idx] * (def.max - def.min);
+        if !p_low.missing()[idx] {
+            let _raw_low = def.range.min + p_low.values()[idx] * (def.range.max - def.range.min);
             // 双极 bias=+1 意味着 rnd → +1，raw → max，values → 1.0
             // 双极 bias=-1 意味着 rnd → -1，raw → min，values → 0.0
         }
-        if !p_high.missing[idx] {
-            let _raw_high = def.min + p_high.values[idx] * (def.max - def.min);
+        if !p_high.missing()[idx] {
+            let _raw_high = def.range.min + p_high.values()[idx] * (def.range.max - def.range.min);
         }
     }
 
     // 攻击2：验证双极参数中点的 raw 值
     // values=0.5 → raw = (min+max)/2，对双极参数就是 0
     for &idx in &bipolar_params {
-        let def = &ALL_PARAMS[idx];
-        let mid_raw = (def.min + def.max) / 2.0;
+        let def = &PARAMS[idx];
+        let mid_raw = (def.range.min + def.range.max) / 2.0;
         // 双极参数中点应该正好是 0（如果 min=-max）
-        let symmetric = (def.min + def.max).abs() < 0.001;
+        let symmetric = (def.range.min + def.range.max).abs() < 0.001;
         if !symmetric {
-            println!("  ⚠ {} 不对称: min={}, max={}, 中点={}", def.id, def.min, def.max, mid_raw);
+            println!("  ⚠ {} 不对称: min={}, max={}, 中点={}", def.id, def.range.min, def.range.max, mid_raw);
         }
     }
 
     // 攻击3：bipolar 参数的 values 是否可能超出 [0,1]？
     const N: usize = 100_000;
     for seed in 0..N as i32 {
-        let p = gen.generate_from_seed(seed, None);
+        let p = gen.from_seed(seed, None);
         for &idx in &bipolar_params {
-            if !p.missing[idx] {
-                let v = p.values[idx];
+            if !p.missing()[idx] {
+                let v = p.values()[idx];
                 assert!(v >= 0.0 && v <= 1.0,
-                    "双极参数 {} 值越界: {} (种子={})", ALL_PARAMS[idx].id, v, seed);
+                    "双极参数 {} 值越界: {} (种子={})", PARAMS[idx].id, v, seed);
             }
         }
     }
@@ -314,18 +314,18 @@ fn attack_bias_injection(gen: &Generator) {
         // 不应 panic
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let bias = Bias::parse(spec);
-            let _p = gen.generate_from_seed(42, Some(spec));
+            let _p = gen.from_seed(42, Some(spec));
             (bias, _p)
         }));
 
         match result {
             Ok((bias, p)) => {
                 // 验证生成的人格仍然有效
-                assert_eq!(p.values.len(), 84);
-                assert_eq!(p.missing.len(), 84);
-                for (i, &v) in p.values.iter().enumerate() {
+                assert_eq!(p.values().len(), 84);
+                assert_eq!(p.missing().len(), 84);
+                for (i, &v) in p.values().iter().enumerate() {
                     assert!(v.is_finite() && v >= 0.0 && v <= 1.0,
-                        "Bias '{}' 导致参数 {} 值异常: {}", desc, ALL_PARAMS[i].id, v);
+                        "Bias '{}' 导致参数 {} 值异常: {}", desc, PARAMS[i].id, v);
                 }
             }
             Err(_) => {
@@ -361,12 +361,12 @@ fn attack_weak_seeds(gen: &Generator) {
 
     // 对每个弱种子，检查 84 个参数是否出现退化
     for &(seed, name) in weak_seeds {
-        let p = gen.generate_from_seed(seed, None);
+        let p = gen.from_seed(seed, None);
 
         // 检查是否所有非缺失参数都聚集在某个值附近
-        let non_missing: Vec<f64> = p.values.iter()
+        let non_missing: Vec<f64> = p.values().iter()
             .enumerate()
-            .filter(|(i, _)| !p.missing[*i])
+            .filter(|(i, _)| !p.missing()[*i])
             .map(|(_, &v)| v)
             .collect();
 
@@ -393,8 +393,8 @@ fn attack_weak_seeds(gen: &Generator) {
     let mut first_cycle: Option<i32> = None;
 
     for seed in 0..100_000i32 {
-        let p = gen.generate_from_seed(seed, None);
-        if !seen_fingerprints.insert(p.fingerprint.clone()) {
+        let p = gen.from_seed(seed, None);
+        if !seen_fingerprints.insert(p.fingerprint().clone()) {
             if first_cycle.is_none() {
                 first_cycle = Some(seed);
             }
@@ -423,10 +423,10 @@ fn attack_float_precision(gen: &Generator) {
     let mut exact_one = 0u64;
 
     for seed in 0..N as i32 {
-        let p = gen.generate_from_seed(seed, None);
+        let p = gen.from_seed(seed, None);
         for i in 0..84 {
-            if p.missing[i] { continue; }
-            let v = p.values[i];
+            if p.missing()[i] { continue; }
+            let v = p.values()[i];
             if v.is_nan() { nan_count += 1; }
             if v.is_infinite() { inf_count += 1; }
             if v > 0.0 && v < f64::MIN_POSITIVE { subnormal_count += 1; }
@@ -448,9 +448,9 @@ fn attack_float_precision(gen: &Generator) {
     // 攻击2：bias 拉到极端时是否产生精确 0 或 1？
     // STRENGTH=1.0, bias=1.0 → rnd=1.0 → values=1.0
     // 这是预期行为，但需要确认不会越界
-    let p = gen.generate_from_seed(42, Some("A=1.0,STRENGTH=1.0"));
+    let p = gen.from_seed(42, Some("A=1.0,STRENGTH=1.0"));
     for i in 0..84 {
-        if !p.missing[i] && !ALL_PARAMS[i].bipolar {
+        if !p.missing()[i] && !PARAMS[i].bipolar {
             // 非双极参数 STRENGTH=1.0 时 values 应该恰好 = 1.0
             // 但浮点精度可能导致 0.999999999999
         }
@@ -468,15 +468,15 @@ fn attack_param_degeneracy() {
 
     let mut issues = Vec::new();
 
-    for (i, p) in ALL_PARAMS.iter().enumerate() {
+    for (i, p) in PARAMS.iter().enumerate() {
         // 检查1：min < max
-        if p.min >= p.max {
-            issues.push(format!("{}: min({}) >= max({})", p.id, p.min, p.max));
+        if p.range.min >= p.range.max {
+            issues.push(format!("{}: min({}) >= max({})", p.id, p.range.min, p.range.max));
         }
 
         // 检查2：bipolar 参数 min 应该 < 0 < max
-        if p.bipolar && (p.min >= 0.0 || p.max <= 0.0) {
-            issues.push(format!("{}: bipolar 但范围不跨越0 [{}, {}]", p.id, p.min, p.max));
+        if p.bipolar && (p.range.min >= 0.0 || p.range.max <= 0.0) {
+            issues.push(format!("{}: bipolar 但范围不跨越0 [{}, {}]", p.id, p.range.min, p.range.max));
         }
 
         // 检查3：ID 格式
@@ -537,7 +537,7 @@ fn attack_generate_collision(gen: &Generator) {
     for _ in 0..CALLS {
         let batch = gen.generate(BATCH_SIZE, None);
         for p in &batch {
-            if !all_fingerprints.insert(p.fingerprint.clone()) {
+            if !all_fingerprints.insert(p.fingerprint().clone()) {
                 collisions += 1;
             }
             total_generated += 1;
@@ -569,15 +569,15 @@ fn attack_information_leak(gen: &Generator) {
     // 攻击：已知连续两个生成结果，能否推断种子？
 
     // 攻击1：已知种子=0 的输出，尝试在输出空间中搜索
-    let target = gen.generate_from_seed(0, None);
+    let target = gen.from_seed(0, None);
 
     // 暴力搜索小范围种子
     const SEARCH_SPACE: i32 = 10_000;
     let mut found = None;
 
     for seed in 0..SEARCH_SPACE {
-        let candidate = gen.generate_from_seed(seed, None);
-        if candidate.values == target.values {
+        let candidate = gen.from_seed(seed, None);
+        if candidate.values() == target.values() {
             found = Some(seed);
             break;
         }
@@ -590,19 +590,19 @@ fn attack_information_leak(gen: &Generator) {
 
     // 攻击2：已知部分参数值，能否缩小种子搜索空间？
     // 取前 3 个非缺失参数值，精度 2 位小数
-    let partial: Vec<u16> = target.values.iter()
+    let partial: Vec<u16> = target.values().iter()
         .enumerate()
-        .filter(|(i, _)| !target.missing[*i])
+        .filter(|(i, _)| !target.missing()[*i])
         .take(3)
         .map(|(_, &v)| (v * 100.0) as u16)
         .collect();
 
     let mut matches = 0usize;
     for seed in 0..10_000i32 {
-        let p = gen.generate_from_seed(seed, None);
-        let p_partial: Vec<u16> = p.values.iter()
+        let p = gen.from_seed(seed, None);
+        let p_partial: Vec<u16> = p.values().iter()
             .enumerate()
-            .filter(|(i, _)| !p.missing[*i])
+            .filter(|(i, _)| !p.missing()[*i])
             .take(3)
             .map(|(_, &v)| (v * 100.0) as u16)
             .collect();
@@ -630,13 +630,13 @@ fn attack_fuzz_all_apis(gen: &Generator) {
     // 对所有公开 API 进行压力模糊测试
     let mut panic_count = 0usize;
 
-    // generate_from_seed 模糊
+    // from_seed 模糊
     for seed in &[0, 1, -1, i32::MAX, i32::MIN, 42, -42, 999999] {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            gen.generate_from_seed(*seed, None);
-            gen.generate_from_seed(*seed, Some(""));
-            gen.generate_from_seed(*seed, Some("B015=0.9"));
-            gen.generate_from_seed(*seed, Some("A=1.0,B=-1.0,STRENGTH=0.5"));
+            gen.from_seed(*seed, None);
+            gen.from_seed(*seed, Some(""));
+            gen.from_seed(*seed, Some("B015=0.9"));
+            gen.from_seed(*seed, Some("A=1.0,B=-1.0,STRENGTH=0.5"));
         }));
         if r.is_err() { panic_count += 1; }
     }
@@ -649,17 +649,17 @@ fn attack_fuzz_all_apis(gen: &Generator) {
         if r.is_err() { panic_count += 1; }
     }
 
-    // generate_from_hex 模糊
+    // from_hex 模糊
     let hex_cases = [
-        Seed::from_int(42).to_hex(),
+        Seed::from_i32(42).to_hex(),
         "AA".repeat(1024),
         "00".repeat(1024),
         "FF".repeat(1024),
     ];
     for hex in &hex_cases {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = gen.generate_from_hex(hex, None);
-            let _ = gen.generate_from_hex(hex, Some("B015=0.9"));
+            let _ = gen.from_hex(hex, None);
+            let _ = gen.from_hex(hex, Some("B015=0.9"));
         }));
         if r.is_err() { panic_count += 1; }
     }
@@ -667,23 +667,23 @@ fn attack_fuzz_all_apis(gen: &Generator) {
     // 无效 hex
     for bad_hex in &["too_short", "", &"ZZ".repeat(1024), &("012".repeat(682) + "X")] {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = gen.generate_from_hex(bad_hex, None);
+            let _ = gen.from_hex(bad_hex, None);
         }));
         // 应该返回 Err，不应该 panic
         if r.is_err() { panic_count += 1; }
     }
 
     // Personality API 模糊
-    let p = gen.generate_from_seed(42, None);
+    let p = gen.from_seed(42, None);
     for id in &["A001", "H084", "B015", "ZZZZ", "", "very_long_id_that_doesnt_exist"] {
         let _ = p.get(id);
     }
     let _ = p.missing_count();
-    let _ = p.fingerprint.clone();
+    let _ = p.fingerprint().clone();
     let _ = format!("{:?}", p);
 
     // Seed API 模糊
-    let mut seed = Seed::from_int(42);
+    let mut seed = Seed::from_i32(42);
     seed.reset();
     for _ in 0..200 { let _ = seed.read_f64(); let _ = seed.read_f32(); let _ = seed.read_bit(); }
     let _ = seed.to_hex();

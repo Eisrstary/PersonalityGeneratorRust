@@ -9,7 +9,7 @@
 //!   6. 并发安全
 
 use personality_generator::{Generator, Seed, Bias};
-use personality_generator::params::ALL_PARAMS;
+use personality_generator::params::PARAMS;
 use std::time::Instant;
 
 fn main() {
@@ -65,18 +65,18 @@ fn test_determinism(gen: &Generator) {
 
     // 同一种子多次生成必须完全一致
     for seed in &[0, 1, 42, -1, i32::MAX, i32::MIN] {
-        let p1 = gen.generate_from_seed(*seed, None);
-        let p2 = gen.generate_from_seed(*seed, None);
-        if p1.values != p2.values || p1.missing != p2.missing || p1.fingerprint != p2.fingerprint {
+        let p1 = gen.from_seed(*seed, None);
+        let p2 = gen.from_seed(*seed, None);
+        if p1.values() != p2.values() || p1.missing() != p2.missing() || p1.fingerprint() != p2.fingerprint() {
             println!("  ❌ 种子 {} 确定性失败!", seed);
             all_ok = false;
         }
     }
 
     // 不同种子必须产生不同结果（极高概率）
-    let p_a = gen.generate_from_seed(1, None);
-    let p_b = gen.generate_from_seed(99999, None);
-    if p_a.values == p_b.values {
+    let p_a = gen.from_seed(1, None);
+    let p_b = gen.from_seed(99999, None);
+    if p_a.values() == p_b.values() {
         println!("  ❌ 不同种子产生相同结果（极端不可能）!");
         all_ok = false;
     }
@@ -102,18 +102,18 @@ fn test_bulk_generation(gen: &Generator) {
     // 验证每个人格的基本完整性
     let mut fingerprint_set = std::collections::HashSet::new();
     for p in &batch {
-        assert_eq!(p.values.len(), 84);
-        assert_eq!(p.missing.len(), 84);
+        assert_eq!(p.values().len(), 84);
+        assert_eq!(p.missing().len(), 84);
         // 所有值必须在 [0, 1]
-        for (i, &v) in p.values.iter().enumerate() {
+        for (i, &v) in p.values().iter().enumerate() {
             if !(0.0..=1.0).contains(&v) {
                 // 双极参数归一化后在 [0,1]，非双极也在 [0,1]
                 // 但双极参数中点 0.5 对应 raw=0，所以归一化值始终在 [0,1]
                 assert!((0.0..=1.0).contains(&v),
-                    "参数 {} 值 {} 超出 [0,1]", ALL_PARAMS[i].id, v);
+                    "参数 {} 值 {} 超出 [0,1]", PARAMS[i].id, v);
             }
         }
-        fingerprint_set.insert(p.fingerprint.clone());
+        fingerprint_set.insert(p.fingerprint().clone());
     }
 
     let unique_ratio = fingerprint_set.len() as f64 / N as f64;
@@ -132,21 +132,21 @@ fn test_bulk_generation(gen: &Generator) {
 
 fn test_extreme_bias(gen: &Generator) {
     // 全部参数拉到极端高
-    let p_high = gen.generate_from_seed(42, Some("A=1.0,B=1.0,C=1.0,D=1.0,E=1.0,F=1.0,G=1.0,H=1.0,STRENGTH=1.0"));
-    let avg_high: f64 = p_high.values.iter().filter(|_| true).sum::<f64>() / 84.0;
+    let p_high = gen.from_seed(42, Some("A=1.0,B=1.0,C=1.0,D=1.0,E=1.0,F=1.0,G=1.0,H=1.0,STRENGTH=1.0"));
+    let avg_high: f64 = p_high.values().iter().filter(|_| true).sum::<f64>() / 84.0;
     println!("  全领域 Bias=1.0: 平均值 = {:.4} (期望 > 0.7)", avg_high);
     assert!(avg_high > 0.65, "全高偏向平均值应 > 0.65, 实际 {}", avg_high);
 
     // 全部参数拉到极端低
-    let p_low = gen.generate_from_seed(42, Some("A=-1.0,B=-1.0,C=-1.0,D=-1.0,E=-1.0,F=-1.0,G=-1.0,H=-1.0,STRENGTH=1.0"));
-    let avg_low: f64 = p_low.values.iter().sum::<f64>() / 84.0;
+    let p_low = gen.from_seed(42, Some("A=-1.0,B=-1.0,C=-1.0,D=-1.0,E=-1.0,F=-1.0,G=-1.0,H=-1.0,STRENGTH=1.0"));
+    let avg_low: f64 = p_low.values().iter().sum::<f64>() / 84.0;
     println!("  全领域 Bias=-1.0: 平均值 = {:.4} (期望 < 0.3)", avg_low);
     assert!(avg_low < 0.35, "全低偏向平均值应 < 0.35, 实际 {}", avg_low);
 
     // 零强度偏向应等于无偏向
-    let p_no = gen.generate_from_seed(42, None);
-    let p_zero = gen.generate_from_seed(42, Some("B015=1.0,STRENGTH=0.0"));
-    assert_eq!(p_no.values, p_zero.values, "STRENGTH=0 应与无偏向完全一致");
+    let p_no = gen.from_seed(42, None);
+    let p_zero = gen.from_seed(42, Some("B015=1.0,STRENGTH=0.0"));
+    assert_eq!(p_no.values(), p_zero.values(), "STRENGTH=0 应与无偏向完全一致");
 
     println!("  ✅ 极端偏向验证通过");
 }
@@ -165,9 +165,9 @@ fn test_statistical_distribution(gen: &Generator) {
 
     for p in &batch {
         for i in 0..84 {
-            if !p.missing[i] {
-                sum[i] += p.values[i];
-                sum_sq[i] += p.values[i] * p.values[i];
+            if !p.missing()[i] {
+                sum[i] += p.values()[i];
+                sum_sq[i] += p.values()[i] * p.values()[i];
             }
         }
     }
@@ -175,7 +175,7 @@ fn test_statistical_distribution(gen: &Generator) {
     // 检查每个非缺失参数的均值是否接近 0.5
     let mut outliers = 0;
     for i in 0..84 {
-        let non_missing = N - batch.iter().filter(|p| p.missing[i]).count();
+        let non_missing = N - batch.iter().filter(|p| p.missing()[i]).count();
         if non_missing > 0 {
             let mean = sum[i] / non_missing as f64;
             let variance = (sum_sq[i] / non_missing as f64) - mean * mean;
@@ -185,7 +185,7 @@ fn test_statistical_distribution(gen: &Generator) {
             if (mean - 0.5).abs() > 0.05 {
                 outliers += 1;
                 if outliers <= 3 {
-                    println!("  ⚠ {} 均值偏离: {:.4} (σ={:.4})", ALL_PARAMS[i].id, mean, std_dev);
+                    println!("  ⚠ {} 均值偏离: {:.4} (σ={:.4})", PARAMS[i].id, mean, std_dev);
                 }
             }
         }
@@ -206,7 +206,7 @@ fn test_seed_roundtrip() {
     let mut all_ok = true;
 
     for seed_val in &[0, 1, -1, 42, 1234567890, i32::MAX, i32::MIN] {
-        let seed = Seed::from_int(*seed_val);
+        let seed = Seed::from_i32(*seed_val);
         let hex = seed.to_hex();
 
         // hex 长度必须是 2048
@@ -253,15 +253,15 @@ fn test_edge_seeds(gen: &Generator) {
     ];
 
     for (name, seed) in &edge_seeds {
-        let p = gen.generate_from_seed(*seed, None);
+        let p = gen.from_seed(*seed, None);
         // 基本完整性检查
-        assert_eq!(p.values.len(), 84);
-        assert_eq!(p.missing.len(), 84);
-        assert!(!p.fingerprint.is_empty());
+        assert_eq!(p.values().len(), 84);
+        assert_eq!(p.missing().len(), 84);
+        assert!(!p.fingerprint().is_empty());
         // 所有值在 [0,1]
-        for (i, &v) in p.values.iter().enumerate() {
+        for (i, &v) in p.values().iter().enumerate() {
             assert!((0.0..=1.0).contains(&v),
-                "种子 {} 参数 {} 值 {} 超出范围", name, ALL_PARAMS[i].id, v);
+                "种子 {} 参数 {} 值 {} 超出范围", name, PARAMS[i].id, v);
         }
     }
 

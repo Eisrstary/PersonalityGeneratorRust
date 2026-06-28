@@ -11,7 +11,7 @@
 //!   8. 种子熵与信息量
 
 use personality_generator::Generator;
-use personality_generator::params::ALL_PARAMS;
+use personality_generator::params::PARAMS;
 use std::collections::HashSet;
 
 fn main() {
@@ -70,7 +70,7 @@ fn test_avalanche_effect(gen: &Generator) {
     const NUM_BITS: usize = 32;
     const TRIALS_PER_BIT: usize = 100;
 
-    let base = gen.generate_from_seed(BASE_SEED, None);
+    let base = gen.from_seed(BASE_SEED, None);
 
     let mut total_change_rate = 0.0f64;
     let mut max_change_rate = 0.0f64;
@@ -83,14 +83,14 @@ fn test_avalanche_effect(gen: &Generator) {
         let mut bit_total = 0usize;
 
         for _ in 0..TRIALS_PER_BIT {
-            let flipped = gen.generate_from_seed(flipped_seed, None);
+            let flipped = gen.from_seed(flipped_seed, None);
             // 使用不同的基础种子偏移
-            let b = gen.generate_from_seed(BASE_SEED.wrapping_add(bit as i32 * 1000), None);
-            let f = gen.generate_from_seed(flipped_seed.wrapping_add(bit as i32 * 1000), None);
+            let b = gen.from_seed(BASE_SEED.wrapping_add(bit as i32 * 1000), None);
+            let f = gen.from_seed(flipped_seed.wrapping_add(bit as i32 * 1000), None);
 
             for param_idx in 0..84 {
-                if !b.missing[param_idx] && !f.missing[param_idx] {
-                    let diff = (b.values[param_idx] - f.values[param_idx]).abs();
+                if !b.missing()[param_idx] && !f.missing()[param_idx] {
+                    let diff = (b.values()[param_idx] - f.values()[param_idx]).abs();
                     if diff > 0.01 {
                         bit_change_count += 1;
                     }
@@ -144,7 +144,7 @@ fn test_birthday_boundary(gen: &Generator) {
     // 取单个参数 4 位小数 → 10000 个可能值
     const N: usize = 5000;
     let batch: Vec<_> = (0..N)
-        .map(|i| gen.generate_from_seed(i as i32, None))
+        .map(|i| gen.from_seed(i as i32, None))
         .collect();
 
     // 对参数 A001（索引 0），统计碰撞
@@ -152,8 +152,8 @@ fn test_birthday_boundary(gen: &Generator) {
     let mut collisions = 0usize;
     let mut total = 0usize;
     for p in &batch {
-        if !p.missing[0] {
-            let bucket = (p.values[0] * 10000.0) as u32;
+        if !p.missing()[0] {
+            let bucket = (p.values()[0] * 10000.0) as u32;
             if !seen.insert(bucket) {
                 collisions += 1;
             }
@@ -187,7 +187,7 @@ fn test_volume_estimation(gen: &Generator) {
     const N: usize = 100_000;
 
     let batch: Vec<_> = (0..N)
-        .map(|i| gen.generate_from_seed(i as i32, None))
+        .map(|i| gen.from_seed(i as i32, None))
         .collect();
 
     // 方法：将 84 维空间分成超立方格子，统计被占据的格子数
@@ -197,10 +197,10 @@ fn test_volume_estimation(gen: &Generator) {
     let mut grid = vec![0u32; GRID * GRID * GRID];
 
     for p in &batch {
-        if !p.missing[0] && !p.missing[14] && !p.missing[28] {
-            let x = (p.values[0] * GRID as f64) as usize;
-            let y = (p.values[14] * GRID as f64) as usize;
-            let z = (p.values[28] * GRID as f64) as usize;
+        if !p.missing()[0] && !p.missing()[14] && !p.missing()[28] {
+            let x = (p.values()[0] * GRID as f64) as usize;
+            let y = (p.values()[14] * GRID as f64) as usize;
+            let z = (p.values()[28] * GRID as f64) as usize;
             let idx = (x.min(GRID - 1)) * GRID * GRID
                 + (y.min(GRID - 1)) * GRID
                 + (z.min(GRID - 1));
@@ -241,7 +241,7 @@ fn test_ks_uniformity(gen: &Generator) {
     const N: usize = 50_000;
 
     let batch: Vec<_> = (0..N)
-        .map(|i| gen.generate_from_seed(i as i32, None))
+        .map(|i| gen.from_seed(i as i32, None))
         .collect();
 
     let mut max_ks = 0.0f64;
@@ -251,8 +251,8 @@ fn test_ks_uniformity(gen: &Generator) {
 
     for param_idx in 0..84 {
         let mut values: Vec<f64> = batch.iter()
-            .filter(|p| !p.missing[param_idx])
-            .map(|p| p.values[param_idx])
+            .filter(|p| !p.missing()[param_idx])
+            .map(|p| p.values()[param_idx])
             .collect();
 
         if values.len() < 1000 {
@@ -310,12 +310,12 @@ fn test_seed_trajectory(gen: &Generator) {
     let mut missing_count = 0usize;
 
     for step in 0..STEPS {
-        let p = gen.generate_from_seed(step as i32, None);
-        if p.missing[PARAM] {
+        let p = gen.from_seed(step as i32, None);
+        if p.missing()[PARAM] {
             missing_count += 1;
             values.push(0.5); // 缺失用中点填充
         } else {
-            values.push(p.values[PARAM]);
+            values.push(p.values()[PARAM]);
         }
     }
 
@@ -350,7 +350,7 @@ fn test_seed_trajectory(gen: &Generator) {
     let turning_rate = sign_changes as f64 / (STEPS - 2) as f64;
 
     println!("  轨迹长度:      {} 步", STEPS);
-    println!("  参数:          {}", ALL_PARAMS[PARAM].name);
+    println!("  参数:          {}", PARAMS[PARAM].name);
     println!("  缺失步数:      {} / {}", missing_count, STEPS);
     println!("  Hurst 指数:    {:.4} (0.5=随机)", hurst);
     println!("  ACF lag-1:     {:.4}", acf_lag1);
@@ -442,7 +442,7 @@ fn test_bias_response_curve(gen: &Generator) {
     let test_param = "B015"; // 内疚感基线，非双极 [0, 1]
     let strengths = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 1.0];
 
-    println!("  参数: {} ({})", test_param, ALL_PARAMS[14].name);
+    println!("  参数: {} ({})", test_param, PARAMS[14].name);
     println!("  {:>8}  {:>10}  {:>10}  {:>10}", "强度", "实测均值", "理论均值", "偏差");
 
     let mut prev_mean = 0.0;
@@ -458,9 +458,9 @@ fn test_bias_response_curve(gen: &Generator) {
         let mut sum = 0.0;
         let mut count = 0usize;
         for seed in 0..N as i32 {
-            let p = gen.generate_from_seed(seed, bias_spec.as_deref());
-            if !p.missing[14] {
-                sum += p.values[14];
+            let p = gen.from_seed(seed, bias_spec.as_deref());
+            if !p.missing()[14] {
+                sum += p.values()[14];
                 count += 1;
             }
         }
@@ -499,7 +499,7 @@ fn test_joint_distribution(gen: &Generator) {
     const N: usize = 100_000;
 
     let batch: Vec<_> = (0..N)
-        .map(|i| gen.generate_from_seed(i as i32, None))
+        .map(|i| gen.from_seed(i as i32, None))
         .collect();
 
     // 测试 5 对参数的联合分布是否接近独立均匀
@@ -514,9 +514,9 @@ fn test_joint_distribution(gen: &Generator) {
         let mut count = 0usize;
 
         for p in &batch {
-            if !p.missing[a] && !p.missing[b] {
-                let x = ((p.values[a] * G as f64) as usize).min(G - 1);
-                let y = ((p.values[b] * G as f64) as usize).min(G - 1);
+            if !p.missing()[a] && !p.missing()[b] {
+                let x = ((p.values()[a] * G as f64) as usize).min(G - 1);
+                let y = ((p.values()[b] * G as f64) as usize).min(G - 1);
                 grid[x][y] += 1;
                 count += 1;
             }
@@ -552,7 +552,7 @@ fn test_seed_entropy(_gen: &Generator) {
     // 测试：种子扩展后的 1024 字节是否具有高熵
     // 用 Shannon 熵估计
 
-    let seed = personality_generator::Seed::from_int(42);
+    let seed = personality_generator::Seed::from_i32(42);
     let bytes = seed.as_bytes();
 
     // 字节级熵

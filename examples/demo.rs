@@ -11,17 +11,17 @@ fn main() {
 
     // ── 示例 1: 纯随机人格 ──
     println!("━━━ 示例 1: 纯随机人格 (种子=42) ━━━\n");
-    let p1 = gen.generate_from_seed(42, None);
+    let p1 = gen.from_seed(42, None);
     println!("{}", textify::to_roleplay(&p1));
 
     // ── 示例 2: 带偏向的人格 ──
     println!("\n━━━ 示例 2: 高内疚+高支配 (种子=42, B015=0.9,C031=0.8) ━━━\n");
-    let p2 = gen.generate_from_seed(42, Some("B015=0.9,C031=0.8"));
+    let p2 = gen.from_seed(42, Some("B015=0.9,C031=0.8"));
     println!("{}", textify::to_roleplay(&p2));
 
     // ── 示例 3: 紧凑模式 ──
     println!("\n━━━ 示例 3: 紧凑模式 (种子=999) ━━━\n");
-    let p3 = gen.generate_from_seed(999, None);
+    let p3 = gen.from_seed(999, None);
     println!("{}", textify::to_compact(&p3));
 
     // ── 示例 4: 详细模式（前 10 个参数） ──
@@ -38,7 +38,7 @@ fn main() {
         println!(
             "  [{}] 指纹: {} | 缺失: {}/84",
             i + 1,
-            p.fingerprint,
+            p.fingerprint(),
             p.missing_count()
         );
     }

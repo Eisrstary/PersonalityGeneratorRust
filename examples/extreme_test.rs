@@ -66,8 +66,8 @@ fn test_10m_collision(gen: &Generator) {
     for batch_start in (0..N).step_by(BATCH) {
         let batch_end = (batch_start + BATCH).min(N);
         for i in batch_start..batch_end {
-            let p = gen.generate_from_seed(i as i32, None);
-            if !seen.insert(p.fingerprint) {
+            let p = gen.from_seed(i as i32, None);
+            if !seen.insert(p.fingerprint().to_string()) {
                 collisions += 1;
             }
         }
@@ -115,15 +115,15 @@ fn test_full_vector_collision(gen: &Generator) {
     let mut collisions = 0u64;
 
     for i in 0..N {
-        let p = gen.generate_from_seed(i as i32, None);
+        let p = gen.from_seed(i as i32, None);
 
         // 量化到 u16: 0..=65535
         let mut key = [0u16; 84];
         for j in 0..84 {
-            if p.missing[j] {
+            if p.missing()[j] {
                 key[j] = 65535; // 缺失用特殊值
             } else {
-                key[j] = (p.values[j] * 65534.0) as u16;
+                key[j] = (p.values()[j] * 65534.0) as u16;
             }
         }
 
@@ -162,9 +162,9 @@ fn test_i16_exhaustion(gen: &Generator) {
     let mut all_values: Vec<[f64; 84]> = Vec::with_capacity(N);
 
     for i in 0i32..65536 {
-        let p = gen.generate_from_seed(i, None);
-        fingerprints.insert(p.fingerprint);
-        all_values.push(p.values);
+        let p = gen.from_seed(i, None);
+        fingerprints.insert(p.fingerprint());
+        all_values.push(p.values());
     }
 
     let elapsed = start.elapsed();
@@ -207,7 +207,7 @@ fn test_value_precision_collision(gen: &Generator) {
     const N: usize = 200_000;
 
     let batch: Vec<_> = (0..N)
-        .map(|i| gen.generate_from_seed(i as i32, None))
+        .map(|i| gen.from_seed(i as i32, None))
         .collect();
 
     // 对每个参数，统计唯一值的数量
@@ -217,9 +217,9 @@ fn test_value_precision_collision(gen: &Generator) {
     for param_idx in 0..84 {
         let mut seen: HashSet<u32> = HashSet::new();
         for p in &batch {
-            if !p.missing[param_idx] {
+            if !p.missing()[param_idx] {
                 // 4 位小数 → 0..10000 的整数
-                let bucket = (p.values[param_idx] * 10000.0) as u32;
+                let bucket = (p.values()[param_idx] * 10000.0) as u32;
                 seen.insert(bucket.min(9999));
             }
         }
@@ -251,7 +251,7 @@ fn test_neighbor_diffusion(gen: &Generator) {
     const N: usize = 50_000;
 
     let batch: Vec<_> = (0..N)
-        .map(|i| gen.generate_from_seed(i as i32, None))
+        .map(|i| gen.from_seed(i as i32, None))
         .collect();
 
     // 对每个参数，计算相邻种子的平均绝对差
@@ -264,8 +264,8 @@ fn test_neighbor_diffusion(gen: &Generator) {
         let mut count = 0usize;
 
         for i in 1..N {
-            if !batch[i].missing[param_idx] && !batch[i - 1].missing[param_idx] {
-                sum_diff += (batch[i].values[param_idx] - batch[i - 1].values[param_idx]).abs();
+            if !batch[i].missing()[param_idx] && !batch[i - 1].missing()[param_idx] {
+                sum_diff += (batch[i].values()[param_idx] - batch[i - 1].values()[param_idx]).abs();
                 count += 1;
             }
         }
@@ -306,9 +306,9 @@ fn test_fingerprint_hash_quality(gen: &Generator) {
 
     let start = Instant::now();
     for i in 0..N {
-        let p = gen.generate_from_seed(i as i32, None);
+        let p = gen.from_seed(i as i32, None);
         // 用指纹的哈希值分桶
-        let hash = fxhash(&p.fingerprint);
+        let hash = fxhash(&p.fingerprint());
         let bucket = (hash % BUCKETS as u64) as usize;
         buckets[bucket] += 1;
     }
