@@ -1,6 +1,9 @@
 //! 原子参数库 —— 84个参数的总装模块
 //!
 //! 将所有8个领域的参数组装成统一的参数注册表
+//!
+//! 每个参数包含：定义、光谱、粒度、耦合、崩塌、漂移、反转
+//! 这不是"特质"，而是"心理功能在特定时刻的取值"
 
 mod domain_a;
 mod domain_b;
@@ -12,10 +15,97 @@ mod domain_g;
 mod domain_h;
 
 use crate::core::*;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-// Re-export the ParameterDefinition type
-pub use crate::core::ParameterGranularity;
+// ============================================================================
+// ParameterDefinition 及相关类型
+// ============================================================================
+
+/// 参数耦合关系描述
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CouplingDescription {
+    pub parameter: ParameterId,
+    pub condition: ValueCondition,
+    pub phenomenon: String,
+}
+
+/// 值条件
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ValueCondition {
+    High,
+    Low,
+    Range(f64, f64),
+    DirectionBipolar(f64),
+}
+
+/// 崩塌条件
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CollapseCondition {
+    pub trigger: String,
+    pub direction: CollapseDirection,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum CollapseDirection {
+    HighToLow,
+    LowToHigh,
+    HighToHigher,
+    LowToLower,
+    Directional(f64),
+    Variable,
+}
+
+/// 漂移模式
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DriftPattern {
+    pub description: String,
+    pub direction: DriftDirection,
+    pub rate_category: DriftRate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum DriftDirection {
+    Increasing,
+    Decreasing,
+    Variable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum DriftRate {
+    VerySlow,
+    Slow,
+    Moderate,
+    Fast,
+    VeryFast,
+    Variable,
+}
+
+/// 反转条件
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReversalCondition {
+    pub trigger: String,
+    pub from_meaning: String,
+    pub to_meaning: String,
+}
+
+/// 完整的参数定义
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParameterDefinition {
+    pub id: ParameterId,
+    pub name: String,
+    pub domain: ParameterDomain,
+    pub definition: String,
+    pub spectrum: SpectrumType,
+    pub spectrum_labels: (String, String),
+    pub granularity: ParameterGranularity,
+    pub couplings: Vec<CouplingDescription>,
+    pub collapses: Vec<CollapseCondition>,
+    pub drifts: Vec<DriftPattern>,
+    pub reversals: Vec<ReversalCondition>,
+    pub default_value: ParameterValue,
+}
 
 /// 参数注册表 —— 所有84个参数的集中存储和查询
 #[derive(Debug, Clone)]
@@ -192,7 +282,8 @@ mod tests {
     fn test_parameter_lookup() {
         let registry = ParameterRegistry::new();
         assert!(registry.get_by_str("A001").is_some());
-        assert!(registry.get_by_str("B015f").is_some());
+        // B015 exists; sub-parameters like B015f are in the Decomposable list, not standalone
+        assert!(registry.get_by_str("B015").is_some());
         assert!(registry.get_by_str("H084").is_some());
         assert!(registry.get_by_str("Z999").is_none());
     }

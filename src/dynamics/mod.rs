@@ -4,7 +4,7 @@
 //! 每个参数都有独立的漂移函数。漂移受时间、经验、事件、训练、关系影响。
 
 use crate::core::*;
-use crate::parameters::{ParameterRegistry, ParameterDefinition};
+use crate::parameters::{ParameterRegistry, DriftDirection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -188,6 +188,7 @@ pub enum PhaseChangeType {
 /// 相变引擎 —— 管理参数的突然跳变
 pub struct PhaseChangeEngine {
     history: Vec<PhaseChangeEvent>,
+    #[allow(dead_code)]
     registry: ParameterRegistry,
 }
 
@@ -471,7 +472,7 @@ mod tests {
 
         // Advance by 100 days
         let future = Timestamp::from_ms(
-            Timestamp::now().unix_ms + (100 * 24 * 3600 * 1000) as i64,
+            Timestamp::now().unix_ms + (100i64 * 24 * 3600 * 1000),
         );
         let changes = engine.apply_all_drifts(&future);
 
@@ -507,6 +508,7 @@ mod tests {
 
         let result = system.step(&now, Some(&situation));
         // Should have some effects
-        assert!(result.reversal_changes.len() >= 0);
+        // Should have some effects (at minimum, no panics)
+        let _ = result.reversal_changes.len();
     }
 }

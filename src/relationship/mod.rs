@@ -152,6 +152,9 @@ pub struct CollapseFunction {
     registry: ParameterRegistry,
 }
 
+/// 跨关系方差条目
+pub type CrossRelationalEntry = (ParameterId, f64, Vec<(String, f64)>);
+
 impl CollapseFunction {
     pub fn new(registry: &ParameterRegistry) -> Self {
         CollapseFunction {
@@ -216,8 +219,8 @@ impl CollapseFunction {
         baselines: &HashMap<ParameterId, ParameterValue>,
         relationships: &[Relationship],
         top_n: usize,
-    ) -> Vec<(ParameterId, f64, Vec<(String, f64)>)> {
-        let mut variances: Vec<(ParameterId, f64, Vec<(String, f64)>)> = Vec::new();
+    ) -> Vec<CrossRelationalEntry> {
+        let mut variances: Vec<CrossRelationalEntry> = Vec::new();
 
         for (param_id, baseline) in baselines {
             let mut values: Vec<(String, f64)> = relationships

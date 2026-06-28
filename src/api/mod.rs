@@ -4,8 +4,8 @@
 //! 对外部都是通过这个API层进行调用。
 
 use crate::core::*;
-use crate::coupling::{CouplingAnalyzer, CouplingMatrix, ActivatedCoupling};
-use crate::dynamics::{DynamicSystem, DriftEngine, PhaseChangeEngine, PhaseChangeType, ReversalEngine};
+use crate::coupling::CouplingAnalyzer;
+use crate::dynamics::{DynamicSystem, PhaseChangeType};
 use crate::epsilon::{Epsilon, EpsilonAcknowledgment, EpsilonFlavor};
 use crate::parameters::ParameterRegistry;
 use crate::relationship::{CollapseFunction, Relationship, RelationshipType};
@@ -262,7 +262,7 @@ impl PersonalitySystem {
             .map(|(id, variance, values)| CrossRelationalVariance {
                 param_id: id.to_string(),
                 variance,
-                values: values.into_iter().map(|(rid, v)| (rid, v)).collect(),
+                values: values.into_iter().collect(),
             })
             .collect()
     }

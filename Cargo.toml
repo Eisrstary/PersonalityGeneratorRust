@@ -8,17 +8,22 @@ authors = ["PAPS Contributors"]
 
 [lib]
 name = "personality_generator"
-crate-type = ["lib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [[bin]]
 name = "paps-cli"
 path = "src/bin/cli.rs"
 required-features = ["cli"]
 
+[[bin]]
+name = "paps-profile"
+path = "src/bin/profile.rs"
+
 [features]
 default = ["cli"]
 cli = ["clap"]
 ffi-export = []
+cdylib = []
 
 [dependencies]
 # Serialization
