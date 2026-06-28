@@ -14,3 +14,7 @@ path = "src/lib.rs"
 [[example]]
 name = "demo"
 path = "examples/demo.rs"
+
+[[example]]
+name = "stress_test"
+path = "examples/stress_test.rs"

@@ -155,7 +155,7 @@ impl Bias {
     }
 
     /// 获取偏向强度。
-    pub(crate) fn strength(&self) -> f64 {
+    pub fn strength(&self) -> f64 {
         self.strength
     }
 }
