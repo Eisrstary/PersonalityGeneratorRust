@@ -33,31 +33,31 @@ impl ParameterValue {
     /// 创建归一化值，自动钳制到 [0.0, 1.0]
     #[inline]
     pub fn normalized(v: f64) -> Self {
-        debug_assert!(
-            v.is_finite(),
-            "ParameterValue::normalized called with non-finite value"
-        );
-        ParameterValue::Normalized(v.clamp(0.0, 1.0))
+        if !v.is_finite() {
+            ParameterValue::Normalized(0.5) // NaN/inf → default mid
+        } else {
+            ParameterValue::Normalized(v.clamp(0.0, 1.0))
+        }
     }
 
     /// 创建双极值，自动钳制到 [-1.0, 1.0]
     #[inline]
     pub fn bipolar(v: f64) -> Self {
-        debug_assert!(
-            v.is_finite(),
-            "ParameterValue::bipolar called with non-finite value"
-        );
-        ParameterValue::Bipolar(v.clamp(-1.0, 1.0))
+        if !v.is_finite() {
+            ParameterValue::Bipolar(0.0)
+        } else {
+            ParameterValue::Bipolar(v.clamp(-1.0, 1.0))
+        }
     }
 
-    /// 创建无界值
+    /// 创建无界值，仅允许非负有限值
     #[inline]
     pub fn unbounded(v: f64) -> Self {
-        debug_assert!(
-            v.is_finite(),
-            "ParameterValue::unbounded called with non-finite value"
-        );
-        ParameterValue::Unbounded(v.max(0.0))
+        if !v.is_finite() || v < 0.0 {
+            ParameterValue::Unbounded(0.0)
+        } else {
+            ParameterValue::Unbounded(v)
+        }
     }
 
     /// 获取原始 f64 值
@@ -333,22 +333,31 @@ impl ParameterId {
     }
 
     /// 从字符串解析，如 "A001", "B015f", "G063"
+    /// 从字符串严格解析，格式: A001, B015f, H084
+    /// 只接受: 大写字母A-H + 3位数字 + 可选1个小写字母
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
-        if s.len() < 4 {
+        let bytes = s.as_bytes();
+        if bytes.len() < 4 || bytes.len() > 5 {
             return None;
         }
-        let domain = s.chars().next()?;
-        if !domain.is_ascii_uppercase() {
+        // 第一位: A-H
+        let domain = bytes[0] as char;
+        if !('A'..='H').contains(&domain) {
             return None;
         }
-        let num_str: String = s[1..].chars().take_while(|c| c.is_ascii_digit()).collect();
-        let number: u16 = num_str.parse().ok()?;
-        let remaining = &s[1 + num_str.len()..];
-        let sub = if remaining.is_empty() {
-            None
+        // 第2-4位: 3位数字
+        if !bytes[1].is_ascii_digit() || !bytes[2].is_ascii_digit() || !bytes[3].is_ascii_digit() {
+            return None;
+        }
+        let number: u16 = std::str::from_utf8(&bytes[1..4]).ok()?.parse().ok()?;
+        // 可选第5位: 小写字母
+        let sub = if bytes.len() == 5 {
+            let c = bytes[4] as char;
+            if !c.is_ascii_lowercase() { return None; }
+            Some(c)
         } else {
-            remaining.chars().next()
+            None
         };
         Some(ParameterId { domain, number, sub })
     }

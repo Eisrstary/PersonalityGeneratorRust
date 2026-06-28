@@ -182,10 +182,24 @@ impl CouplingMatrix {
     }
 
     /// 检查参数值是否满足条件
+    /// 检查参数值是否满足条件（光谱感知）
     fn check_condition(value: &ParameterValue, condition: &ValueCondition) -> bool {
         match condition {
-            ValueCondition::High => value.as_f64() > 0.6,
-            ValueCondition::Low => value.as_f64() < 0.4,
+            ValueCondition::High => {
+                match value {
+                    ParameterValue::Normalized(_) => value.as_f64() > 0.6,
+                    ParameterValue::Bipolar(_) => value.as_f64() > 0.3,
+                    // Unbounded: "高"意味着显著大于默认值，用相对阈值
+                    ParameterValue::Unbounded(_) => value.as_f64() > 1.0,
+                }
+            }
+            ValueCondition::Low => {
+                match value {
+                    ParameterValue::Normalized(_) => value.as_f64() < 0.4,
+                    ParameterValue::Bipolar(_) => value.as_f64() < -0.3,
+                    ParameterValue::Unbounded(_) => value.as_f64() < 1.0 && value.as_f64() > 0.0,
+                }
+            }
             ValueCondition::Range(lo, hi) => {
                 let v = value.as_f64();
                 v >= *lo && v <= *hi

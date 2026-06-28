@@ -35,7 +35,7 @@ pub struct DriftState {
 
 /// 漂移引擎 —— 管理所有参数的漂移
 pub struct DriftEngine {
-    states: HashMap<ParameterId, DriftState>,
+    pub(crate) states: HashMap<ParameterId, DriftState>,
     registry: ParameterRegistry,
 }
 

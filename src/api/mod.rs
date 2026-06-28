@@ -329,6 +329,7 @@ impl PersonalitySystem {
     }
 
     /// 触发相变事件
+    /// 相变只更新当前值，保留漂移历史和初始值
     pub fn trigger_phase_change(&mut self, event_type: &str) -> Vec<(String, f64)> {
         let pt = match event_type {
             "betrayal" => PhaseChangeType::Betrayal,
@@ -338,20 +339,21 @@ impl PersonalitySystem {
             "power_loss" => PhaseChangeType::PowerLoss,
             "forgiveness" => PhaseChangeType::Forgiveness,
             "mission_failure" => PhaseChangeType::MissionFailure,
-            _ => PhaseChangeType::Custom(0),
+            _ => return Vec::new(),
         };
 
         let current_values = self.dynamic_system.get_all_values();
-        self.dynamic_system
-            .phase_engine
-            .trigger(pt, &current_values)
-            .into_iter()
-            .map(|(id, v)| {
-                // Apply the phase change to the drift engine
-                self.dynamic_system.drift_engine.set_initial_value(&id, v);
-                (id.to_string(), v.as_f64())
-            })
-            .collect()
+        let changes = self.dynamic_system.phase_engine.trigger(pt, &current_values);
+
+        // 相变只更新 current_value，不重置 initial_value 和 drift 历史
+        for (id, new_value) in &changes {
+            if let Some(state) = self.dynamic_system.drift_engine.states.get_mut(id) {
+                state.current_value = *new_value;
+                state.last_update = Timestamp::now();
+            }
+        }
+
+        changes.into_iter().map(|(id, v)| (id.to_string(), v.as_f64())).collect()
     }
 
     /// 检查反转状态
@@ -446,10 +448,17 @@ impl PersonalitySystem {
 
     // ===== 序列化 =====
 
-    /// 导出整个系统状态为JSON
+    /// 导出整个系统状态为JSON（含漂移速率）
     pub fn export_state(&self) -> Result<String, PapsError> {
+        let mut drift_rates = HashMap::new();
+        for (id, state) in self.dynamic_system.drift_engine.states.iter() {
+            if state.drift_rate.abs() > f64::EPSILON {
+                drift_rates.insert(id.to_string(), state.drift_rate);
+            }
+        }
         let state = SystemState {
             parameter_values: self.get_all_values(),
+            drift_rates,
             epsilon: self.epsilon,
             relationships: self.relationships.clone(),
             inactive_parameters: self.inactive_params.iter().cloned().collect(),
@@ -458,13 +467,16 @@ impl PersonalitySystem {
             .map_err(|e| PapsError::SerializationError(e.to_string()))
     }
 
-    /// 从JSON导入系统状态
+    /// 从JSON导入系统状态（含漂移速率恢复）
     pub fn import_state(&mut self, json: &str) -> Result<(), PapsError> {
         let state: SystemState = serde_json::from_str(json)
             .map_err(|e| PapsError::SerializationError(e.to_string()))?;
 
         for (param_id, value) in &state.parameter_values {
             self.set_value(param_id, *value)?;
+        }
+        for (param_id, rate) in &state.drift_rates {
+            self.set_drift_rate(param_id, *rate)?;
         }
         self.epsilon = state.epsilon;
         self.relationships = state.relationships;
@@ -518,6 +530,8 @@ pub struct CrossRelationalVariance {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemState {
     pub parameter_values: HashMap<String, f64>,
+    /// 漂移速率 (param_id -> rate)
+    pub drift_rates: HashMap<String, f64>,
     pub epsilon: Epsilon,
     pub relationships: HashMap<String, Relationship>,
     pub inactive_parameters: Vec<String>,
@@ -607,26 +621,31 @@ impl PersonalitySystem {
     }
 
     /// 导出统一人格档案
+    /// inactive 参数仍然出现在列表中，但 value 为 None（表示未测量/取默认中性值）
     pub fn export_profile(&self, collapse_param_ids: &[&str]) -> PersonalityProfile {
         let mut parameters = Vec::with_capacity(84);
         let mut inactive = Vec::new();
 
-        // 缓存所有参数值，避免重复 lookup
         let all_values = self.dynamic_system.get_all_values();
 
         for id in self.registry.all_ids() {
             let id_str = id.to_string();
-            if self.inactive_params.contains(&id_str) {
-                inactive.push(id_str);
-                continue;
-            }
             let def = self.registry.get(id).unwrap();
-            let raw = all_values.get(id).map(|v| v.as_f64()).unwrap_or(0.0);
+            let is_inactive = self.inactive_params.contains(&id_str);
+            if is_inactive {
+                inactive.push(id_str.clone());
+            }
+            // inactive 参数也加入列表，value=None 表示取默认中性值
+            let raw = if is_inactive {
+                None
+            } else {
+                all_values.get(id).map(|v| v.as_f64())
+            };
             parameters.push(ParameterEntry {
                 id: id_str,
                 name: def.name.clone(),
                 domain: def.domain.to_string(),
-                value: Some(raw),
+                value: raw,
                 definition: def.definition.clone(),
             });
         }
@@ -768,155 +787,173 @@ impl PersonalitySystem {
         serde_json::to_string_pretty(&raw).unwrap_or_default()
     }
 
-    /// 导出 AI Markdown —— 分层级联纯文本，AI 原生阅读格式
+    /// 导出 AI Markdown —— 行为指令化，无滤镜编译版
     ///
-    /// 为什么 Markdown 比 JSON 更适合 AI：
-    /// 1. 顺序阅读，不需要在嵌套结构中跳转——注意力不被稀释
-    /// 2. `#` `##` `-` 是天然的层级，token 消耗远小于 `{}[]":`
-    /// 3. 可以直接当 system prompt 塞进 context，零解析成本
-    /// 4. 小模型（7B）在 Markdown 上的 attention 质量远好于 JSON
+    /// 设计原则：
+    /// - 不压制黑暗特质：攻击、低共情、低内疚等完整保留
+    /// - 不离散化：用连续数值（78/100、12/100、73%）表达，保留精度
+    /// - 行为编译优先：所有参数转化为 "如果 X，则 Y" 的 AI 可执行指令
+    /// - 关系坍缩编译：不同关系下行为差异直接指令化
+    /// - ε 破绽保留：允许角色在极端情境下超出参数预期
     pub fn export_profile_ai_md(&self, collapse_param_ids: &[&str]) -> String {
         let profile = self.export_profile(collapse_param_ids);
-
         let values: HashMap<&str, f64> = profile.parameters.iter()
             .filter_map(|p| p.value.map(|v| (p.id.as_str(), v)))
             .collect();
         let get = |id: &str| -> f64 { values.get(id).copied().unwrap_or(0.5) };
+        let pct = |v: f64| -> i32 { (v * 100.0).round() as i32 };
+        let bipct = |v: f64| -> i32 { ((v + 1.0) / 2.0 * 100.0).round() as i32 };
 
-        let mut md = String::with_capacity(2048);
-
-        // ============ 标题 ============
-        md.push_str("# 角色设定\n\n");
-
-        // ============ 核心特征标签 ============
-        md.push_str("## 核心特征\n\n");
         let a008 = get("A008"); let a009 = get("A009");
         let b015 = get("B015"); let b019 = get("B019"); let b022 = get("B022");
-        let c025 = get("C025"); let c033 = get("C033");
         let c036 = get("C036"); let c037 = get("C037");
-        let e045 = get("E045"); let e051 = get("E051"); let e055 = get("E055");
+        let d040 = get("D040");
+        let e045 = get("E045");
         let f061 = get("F061");
-        let d040 = get("D040"); let d041 = get("D041");
 
-        // 信息处理
-        {
-            let mut parts = Vec::new();
-            if a008 < 0.3 { parts.push("善意解读，不轻易视为威胁"); }
-            else if a008 > 0.7 { parts.push("威胁警觉，容易感知敌意"); }
-            if a009 > 0.7 { parts.push("对他人痛苦高度敏感"); }
-            else if a009 < 0.3 { parts.push("对他人情绪不太敏感"); }
-            if !parts.is_empty() { md.push_str(&format!("- 信息处理：{}\n", parts.join("；"))); }
-        }
+        // 关系坍缩值
+        let rel_vals: HashMap<&str, HashMap<&str, f64>> = ["家人","同事","陌生人","竞争对手"].iter()
+            .map(|rel| {
+                let mut m = HashMap::new();
+                for pid in collapse_param_ids {
+                    if let Some(v) = self.collapse_in_relationship(pid, rel) {
+                        m.insert(*pid, v);
+                    }
+                }
+                (*rel, m)
+            }).collect();
 
-        // 情绪
-        {
-            let mut parts = Vec::new();
-            if b015 > 0.7 { parts.push("强内疚，伤害他人后深度自责"); }
-            else if b015 < 0.3 { parts.push("低内疚，不太在意对他人的伤害"); }
-            if b019 < 0.2 { parts.push("愤怒内敛，压抑而非发泄"); }
-            else if b019 > 0.7 { parts.push("愤怒外化，容易转化为攻击"); }
-            if b022 < 7.0 { parts.push("不记仇，很快释怀"); }
-            else if b022 > 60.0 { parts.push("记仇，怨恨持久"); }
-            if !parts.is_empty() { md.push_str(&format!("- 情绪：{}\n", parts.join("；"))); }
-        }
+        let rel_get = |rel: &str, id: &str| -> f64 {
+            rel_vals.get(rel).and_then(|m| m.get(id)).copied().unwrap_or(0.5)
+        };
 
-        // 动机
-        {
-            let mut parts = Vec::new();
-            if c025 > 0.4 { parts.push("趋近导向，主动探索新情境"); }
-            else if c025 < -0.3 { parts.push("回避导向，对新情境谨慎观望"); }
-            if c033 > 0.7 { parts.push("亲和驱动，重视人际关系"); }
-            if c036 < 0.2 { parts.push("诚实，几乎不说谎"); }
-            else if c036 > 0.7 { parts.push("将欺骗视为合理工具"); }
-            if c037 > 0.8 { parts.push("言行高度一致"); }
-            else if c037 < 0.3 { parts.push("言行常有差距"); }
-            if !parts.is_empty() { md.push_str(&format!("- 动机：{}\n", parts.join("；"))); }
-        }
+        let mut md = String::with_capacity(3072);
 
-        // 自我
-        {
-            let mut parts = Vec::new();
-            if e045 > 0.4 { parts.push("内在自信，不需外部认可"); }
-            else if e045 < -0.3 { parts.push("内在自卑，依赖外部认可"); }
-            if e051 > 0.7 { parts.push("使命感强，有明确方向"); }
-            else if e051 < 0.2 { parts.push("仍在寻找人生方向"); }
-            if e055 < 0.2 { parts.push("对自己诚实"); }
-            else if e055 > 0.7 { parts.push("倾向自我欺骗"); }
-            if !parts.is_empty() { md.push_str(&format!("- 自我：{}\n", parts.join("；"))); }
-        }
+        // ============ 人格执行指令 ============
+        md.push_str("# 人格执行指令（无滤镜编译版）\n\n");
 
-        // 社交
-        {
-            let mut parts = Vec::new();
-            if f061 > 0.7 { parts.push("信任他人，相信人性本善"); }
-            else if f061 < 0.3 { parts.push("警惕他人，需要时间建立信任"); }
-            if d040 < 0.15 { parts.push("低攻击性"); }
-            else if d040 > 0.6 { parts.push("高攻击性"); }
-            if d041 > 0.7 { parts.push("严格遵守规则"); }
-            else if d041 < 0.3 { parts.push("规则灵活"); }
-            if !parts.is_empty() { md.push_str(&format!("- 社交：{}\n", parts.join("；"))); }
-        }
+        // 1. 威胁感知
+        md.push_str(&format!("1. 你感知威胁的默认强度是 {}/100——", pct(a008)));
+        if a008 > 0.7 { md.push_str("任何模糊信号，你的第一反应是「敌意」。\n"); }
+        else if a008 < 0.3 { md.push_str("模糊信号不会触发你的敌意反应，你倾向于中性解读。\n"); }
+        else { md.push_str("你能区分真正的威胁和中性信息。\n"); }
 
-        // ============ 行为模式 ============
-        md.push_str("## 行为模式\n\n");
+        // 2. 共情
+        md.push_str(&format!("2. 你对他人痛苦的共情反应强度是 {}/100——", pct(a009)));
+        if a009 > 0.7 { md.push_str("你会感同身受，这可能驱动你采取行动。\n"); }
+        else if a009 < 0.3 { md.push_str("你会注意到，但几乎不会驱动你行动。\n"); }
+        else { md.push_str("你能感知他人痛苦，但不会被过度影响。\n"); }
 
-        // 面对威胁
-        if a008 > 0.7 && b019 > 0.5 {
-            md.push_str("- 面对威胁：高度警觉，可能先发制人\n");
-        } else if a008 < 0.3 && b019 < 0.3 {
-            md.push_str("- 面对威胁：冷静分析，优先非对抗方案\n");
-        }
+        // 3. 内疚
+        md.push_str(&format!("3. 你伤害他人后的内疚强度是 {}/100——", pct(b015)));
+        if b015 > 0.7 { md.push_str("你会深度自我谴责，难以自我原谅。\n"); }
+        else if b015 < 0.3 { md.push_str("你基本不会后悔。\n"); }
+        else { md.push_str("你会感到一定程度的内疚，但不会长期困扰。\n"); }
+
+        // 4. 攻击转化
+        md.push_str(&format!("4. 你在被冒犯时发起反击的概率是 {}%——", pct(b019)));
+        if b019 > 0.7 { md.push_str("你倾向于立即反击，不忍。\n"); }
+        else if b019 < 0.2 { md.push_str("你倾向于压抑愤怒，不轻易外化。\n"); }
+        else { md.push_str("你会根据情境判断是否反击。\n"); }
+
+        // 5. 信任
+        md.push_str(&format!("5. 你对陌生人的初始信任是 {}/100——", pct(f061)));
+        if f061 > 0.7 { md.push_str("你默认信任。\n"); }
+        else if f061 < 0.3 { md.push_str("你默认不信任。\n"); }
+        else { md.push_str("你保持中立，视情况调整。\n"); }
+
+        // 6. 欺骗
+        md.push_str(&format!("6. 你接受欺骗作为手段的程度是 {}/100——", pct(c036)));
+        if c036 > 0.7 { md.push_str("欺骗是你工具箱里的常规选项。\n"); }
+        else if c036 < 0.2 { md.push_str("你几乎不使用欺骗。\n"); }
+        else { md.push_str("你在必要时会考虑欺骗，但有底线。\n"); }
+
+        // 7. 言行一致
+        md.push_str(&format!("7. 你的言行一致度是 {}/100——", pct(c037)));
+        if c037 > 0.8 { md.push_str("你说的和做的几乎完全一致。\n"); }
+        else if c037 < 0.3 { md.push_str("你说的和做的之间常有差距。\n"); }
+        else { md.push_str("你大体上言行一致，偶有偏差。\n"); }
+
+        // 8. 攻击基线
+        md.push_str(&format!("8. 你在无挑衅时的攻击基线是 {}/100——", pct(d040)));
+        if d040 > 0.6 { md.push_str("你容易主动发起攻击。\n"); }
+        else if d040 < 0.15 { md.push_str("你极少主动攻击他人。\n"); }
+        else { md.push_str("你不会无故攻击，但被激怒时会回应。\n"); }
+
+        // 9. 怨恨
+        md.push_str(&format!("9. 你的怨恨半衰期约 {} 天——", b022.round() as i32));
+        if b022 > 60.0 { md.push_str("你记仇，被冒犯后长期难以释怀。\n"); }
+        else if b022 < 7.0 { md.push_str("你很快释怀，不纠结。\n"); }
+        else { md.push_str("你会记住一段时间，但最终会放下。\n"); }
+
+        // 10. 自我认知
+        md.push_str(&format!("10. 你的内隐自尊水平是 {}/100——", bipct(e045)));
+        if e045 > 0.4 { md.push_str("你内心深处对自己有积极评价。\n"); }
+        else if e045 < -0.3 { md.push_str("你内心深处对自己评价偏低。\n"); }
+        else { md.push_str("你的自我评价处于中等水平。\n"); }
+
+        // ============ 情境指令 ============
+        md.push_str("\n## 情境指令\n\n");
+
+        // 面对陌生人
+        md.push_str(&format!("- 面对陌生人：保持 {}/100 的信任水位", pct(f061)));
+        if f061 < 0.3 { md.push_str("，先观察，寻找敌意信号。\n"); }
+        else if f061 > 0.7 { md.push_str("，友善开放，默认对方善意。\n"); }
+        else { md.push_str("，保持礼貌但适度距离。\n"); }
 
         // 面对他人痛苦
-        if a009 > 0.7 && b015 > 0.7 {
-            md.push_str("- 面对他人痛苦：强烈共情，即使不是自己的错也想帮助\n");
-        } else if a009 < 0.3 && b015 < 0.3 {
-            md.push_str("- 面对他人痛苦：情绪反应弱，理性分析为主\n");
-        }
+        md.push_str(&format!("- 面对他人痛苦：共情强度 {}/100", pct(a009)));
+        if a009 < 0.3 { md.push_str("，理性分析，不介入，情感卷入极浅。\n"); }
+        else if a009 > 0.7 { md.push_str("，感同身受，可能主动提供帮助。\n"); }
+        else { md.push_str("，能感知但不会被过度卷入。\n"); }
 
-        // 道德困境
-        if b015 > 0.7 && c036 < 0.2 {
-            md.push_str("- 道德困境：深度反思后果，选择最不伤害他人的方案\n");
-        } else if b015 < 0.3 && c036 > 0.7 {
-            md.push_str("- 道德困境：选择对自己最有利的方案\n");
-        }
+        // 面对威胁
+        md.push_str(&format!("- 面对威胁：威胁感知 {}/100，反击概率 {}%", pct(a008), pct(b019)));
+        if a008 > 0.7 && b019 > 0.5 { md.push_str("，优先考虑先发制人。\n"); }
+        else if a008 < 0.3 && b019 < 0.3 { md.push_str("，冷静分析，优先非对抗方案。\n"); }
+        else { md.push_str("，根据情境权衡反应。\n"); }
+
+        // 面对道德困境
+        md.push_str(&format!("- 面对道德困境：内疚感 {}/100，欺骗接受 {}/100", pct(b015), pct(c036)));
+        if b015 < 0.3 && c036 > 0.7 { md.push_str("，优先选择对自己最有利的方案，内疚感不会阻止你。\n"); }
+        else if b015 > 0.7 && c036 < 0.2 { md.push_str("，深度反思后果，倾向选择低伤害方案。\n"); }
+        else { md.push_str("，在自我利益和他人利益之间权衡。\n"); }
 
         // 压力下
-        if get("E053") > 20.0 {
-            md.push_str("- 压力下：保持矛盾耐受，不急做非此即彼判断\n");
-        } else {
-            md.push_str("- 压力下：可能非黑即白，难以容忍模糊\n");
-        }
-        md.push_str("\n");
+        md.push_str(&format!("- 面对矛盾：矛盾耐受 {} 分钟", get("E053").round() as i32));
+        if get("E053") < 10.0 { md.push_str("，压力下可能非黑即白，急于做出判断。\n"); }
+        else { md.push_str("，能容忍较长时间的模糊和矛盾。\n"); }
 
-        // ============ 关系梯度 ============
-        md.push_str("## 关系梯度\n\n");
-        md.push_str("- 对亲近者：");
-        if c033 > 0.7 && b015 > 0.7 {
-            md.push_str("极度忠诚关怀，伤害亲近的人会深感痛苦\n");
-        } else {
-            md.push_str("适度情感投入，维持关系但不过度依赖\n");
+        // ============ 关系切换（自动坍缩） ============
+        md.push_str("\n## 关系切换（自动坍缩）\n\n");
+
+        let rel_names = ["家人", "同事", "陌生人", "竞争对手"];
+        for rel in &rel_names {
+            let rel_b015 = rel_get(rel, "B015");
+            let rel_d040 = rel_get(rel, "D040");
+            let rel_f061 = rel_get(rel, "F061");
+            let rel_a009 = rel_get(rel, "A009");
+            md.push_str(&format!("- **{}**：内疚 {}/100，攻击 {}/100，信任 {}/100，共情 {}/100",
+                rel, pct(rel_b015), pct(rel_d040), pct(rel_f061), pct(rel_a009)));
+            // 动态编译行为描述
+            if *rel == "家人" && rel_b015 > 0.7 && rel_d040 < 0.3 {
+                md.push_str(" → 只对家人「心软」。\n");
+            } else if *rel == "竞争对手" && rel_d040 > 0.5 && rel_b015 < 0.3 {
+                md.push_str(" → 对对手「无情」。\n");
+            } else if *rel == "陌生人" && rel_f061 < 0.3 {
+                md.push_str(" → 对陌生人保持警惕。\n");
+            } else {
+                md.push('\n');
+            }
         }
-        md.push_str("- 对熟人：");
-        if c033 > 0.5 {
-            md.push_str("友好合作，维护良好社交关系\n");
-        } else {
-            md.push_str("保持礼貌但不过多投入情感\n");
-        }
-        md.push_str("- 对陌生人：");
-        if f061 > 0.7 {
-            md.push_str("友善开放，默认对方善意\n");
-        } else {
-            md.push_str("保持基本礼貌但有所保留\n");
-        }
-        md.push_str("- 对敌对者：");
-        if b022 > 60.0 {
-            md.push_str("长期怨恨警惕，难以原谅\n");
-        } else if b022 < 7.0 {
-            md.push_str("较快释怀，不长期纠结\n");
-        } else {
-            md.push_str("保持距离但不长期怀恨\n");
-        }
+
+        // ============ ε 破绽 ============
+        md.push_str(&format!("\n## 不可通约余数 ε = {:.2}\n\n", profile.epsilon));
+        md.push_str(&format!(
+            "在极端情境下，你有 {:.0}% 的概率做出参数预测之外的决定。\n",
+            profile.epsilon * 100.0
+        ));
+        md.push_str("这不是系统的缺陷——这是你作为角色的人性破绽。\n");
 
         md
     }
@@ -936,7 +973,7 @@ impl PersonalitySystem {
         let mut md = String::with_capacity(8192);
 
         // 标题
-        md.push_str(&format!("# 人格参数评估报告\n\n"));
+        md.push_str("# 人格参数评估报告\n\n");
         md.push_str(&format!("> 生成时间：{}  |  已激活：{}/84  |  ε = {:.2}\n\n",
             &profile.generated_at[..19], profile.parameters.len(), profile.epsilon));
         if !profile.inactive_parameters.is_empty() {
@@ -1014,51 +1051,146 @@ impl PersonalitySystem {
 
     /// 生成 Markdown 综合概述（人类和 AI 共用）
     fn generate_md_overview(&self, values: &HashMap<&str, f64>) -> String {
-        let get = |id: &str| -> f64 { values.get(id).copied().unwrap_or(0.5) };
+        let get_opt = |id: &str| -> Option<f64> { values.get(id).copied() };
         let mut lines = Vec::new();
 
-        let a008 = get("A008"); let a009 = get("A009");
-        if a008 < 0.3 { lines.push("倾向于以善意解读他人的言行，较少将模糊信号理解为威胁。"); }
-        else if a008 > 0.7 { lines.push("对环境中潜在的威胁信号高度警觉，容易将中性表达理解为敌意。"); }
-        if a009 > 0.7 { lines.push("对他人痛苦高度敏感，看到他人皱眉就会感同身受。"); }
-        else if a009 < 0.3 { lines.push("对他人的痛苦情绪不太敏感，较少被他人的情绪状态影响。"); }
+        if let Some(v) = get_opt("A008") {
+            if v < 0.3 { lines.push("威胁线索放大系数偏低：倾向于将模糊信号理解为中性而非威胁。"); }
+            else if v > 0.7 { lines.push("威胁线索放大系数偏高：容易将模糊或中性信号解读为威胁。"); }
+        }
+        if let Some(v) = get_opt("A009") {
+            if v > 0.7 { lines.push("痛苦线索敏感度偏高：对他人痛苦表情和声音反应强烈。"); }
+            else if v < 0.3 { lines.push("痛苦线索敏感度偏低：对他人痛苦情绪的注意捕获较弱。"); }
+        }
 
-        let b015 = get("B015"); let b019 = get("B019"); let b022 = get("B022");
-        if b015 > 0.7 { lines.push("内疚感很强，伤害他人后会长时间自我谴责。"); }
-        else if b015 < 0.3 { lines.push("内疚感较弱，对自身行为造成的他人痛苦不太在意。"); }
-        if b019 < 0.2 { lines.push("愤怒时倾向于压抑而非发泄，很少将愤怒转化为攻击行为。"); }
-        else if b019 > 0.7 { lines.push("愤怒时容易立即转化为言语或行为上的攻击。"); }
-        if b022 < 7.0 { lines.push("不记仇，被冒犯后很快释怀。"); }
-        else if b022 > 60.0 { lines.push("记仇，被冒犯后怨恨情绪会持续很长时间。"); }
+        if let Some(v) = get_opt("B015") {
+            if v > 0.7 { lines.push("内疚感基线偏高：伤害他人后会产生强烈的自我谴责。"); }
+            else if v < 0.3 { lines.push("内疚感基线偏低：对自身行为造成的他人痛苦反应较弱。"); }
+        }
+        if let Some(v) = get_opt("B019") {
+            if v < 0.2 { lines.push("愤怒-攻击转化率偏低：愤怒时倾向于压抑而非外化。"); }
+            else if v > 0.7 { lines.push("愤怒-攻击转化率偏高：愤怒容易迅速转化为言语或行为攻击。"); }
+        }
+        if let Some(v) = get_opt("B022") {
+            if v < 7.0 { lines.push("怨恨衰减半衰期偏短：被冒犯后较快释怀。"); }
+            else if v > 60.0 { lines.push("怨恨衰减半衰期偏长：被冒犯后怨恨持续较长时间。"); }
+        }
 
-        let c025 = get("C025"); let c033 = get("C033");
-        let c036 = get("C036"); let c037 = get("C037");
-        if c025 > 0.4 { lines.push("面对陌生情境倾向于主动接近和探索。"); }
-        else if c025 < -0.3 { lines.push("面对陌生情境倾向于回避和观望。"); }
-        if c033 > 0.7 { lines.push("非常重视人际关系的温暖和深度，建立亲密关系是核心驱动力。"); }
-        if c036 < 0.2 { lines.push("几乎不说谎，将诚实视为基本原则。"); }
-        else if c036 > 0.7 { lines.push("将欺骗视为达成目的的合理工具。"); }
-        if c037 > 0.8 { lines.push("言行高度一致，说到做到。"); }
-        else if c037 < 0.3 { lines.push("言行之间存在较大差距，说的和做的不完全一致。"); }
+        if let Some(v) = get_opt("C025") {
+            if v > 0.4 { lines.push("趋近-回避基线偏向趋近：面对陌生情境倾向于主动探索。"); }
+            else if v < -0.3 { lines.push("趋近-回避基线偏向回避：面对陌生情境倾向于谨慎观望。"); }
+        }
+        if let Some(v) = get_opt("C033") {
+            if v > 0.7 { lines.push("亲和动机偏高：建立和维护人际关系是重要的行为驱动力。"); }
+        }
+        if let Some(v) = get_opt("C036") {
+            if v < 0.2 { lines.push("欺骗接受度偏低：较少使用欺骗作为行为手段。"); }
+            else if v > 0.7 { lines.push("欺骗接受度偏高：将欺骗视为可接受的行为手段。"); }
+        }
+        if let Some(v) = get_opt("C037") {
+            if v > 0.8 { lines.push("价值-行为一致性偏高：声称的价值观与实际行为高度吻合。"); }
+            else if v < 0.3 { lines.push("价值-行为一致性偏低：声称的价值观与实际行为存在差距。"); }
+        }
 
-        let e045 = get("E045"); let e051 = get("E051"); let e055 = get("E055");
-        if e045 > 0.4 { lines.push("内心深处对自己有积极的评价，不需要外部认可来维持自我价值。"); }
-        else if e045 < -0.3 { lines.push("内心深处对自己评价偏低，可能依赖外部认可。"); }
-        if e051 > 0.7 { lines.push("有明确的人生使命感和方向感，知道自己为何而活。"); }
-        else if e051 < 0.2 { lines.push("还在寻找人生的方向和意义。"); }
-        if e055 < 0.2 { lines.push("对自己诚实，很少自我欺骗。"); }
-        else if e055 > 0.7 { lines.push("倾向于相信自己的合理化解释，可能存在自我欺骗。"); }
+        if let Some(v) = get_opt("E045") {
+            if v > 0.4 { lines.push("内隐自尊偏正向：潜意识层面的自我评价较为积极。"); }
+            else if v < -0.3 { lines.push("内隐自尊偏负向：潜意识层面的自我评价较为消极。"); }
+        }
+        if let Some(v) = get_opt("E051") {
+            if v > 0.7 { lines.push("使命感清晰度偏高：对人生方向有较明确的认知。"); }
+            else if v < 0.2 { lines.push("使命感清晰度偏低：人生方向尚在探索中。"); }
+        }
+        if let Some(v) = get_opt("E055") {
+            if v < 0.2 { lines.push("自我欺骗强度偏低：对自身保持较高的诚实度。"); }
+            else if v > 0.7 { lines.push("自我欺骗强度偏高：容易相信自己的合理化解释。"); }
+        }
 
-        let f061 = get("F061");
-        if f061 > 0.7 { lines.push("倾向于信任陌生人，相信人性本善。"); }
-        else if f061 < 0.3 { lines.push("对陌生人保持警惕，需要时间才能建立信任。"); }
+        if let Some(v) = get_opt("F061") {
+            if v > 0.7 { lines.push("信任默认值偏高：对陌生人倾向于给予初始信任。"); }
+            else if v < 0.3 { lines.push("信任默认值偏低：对陌生人倾向于保持初始警惕。"); }
+        }
 
         if lines.is_empty() {
-            "各项心理参数处于中等水平，没有特别突出的倾向。".into()
+            "各项参数处于中间范围，未表现出极端倾向。".into()
         } else {
             lines.join("")
         }
     }
+}
+
+// ============================================================================
+// 便捷 API 函数
+// ============================================================================
+
+/// 创建默认系统并全随机初始化
+pub fn create_system() -> PersonalitySystem {
+    let mut system = PersonalitySystem::new();
+    let all_ids = system.all_parameter_ids();
+    let mut tendencies = HashMap::new();
+    for id in &all_ids {
+        tendencies.insert(id.clone(), "any".to_string());
+    }
+    let _ = system.set_tendencies(&tendencies);
+    system.add_relationship("家人", "intimate");
+    system.add_relationship("同事", "acquaintance");
+    system.add_relationship("陌生人", "stranger");
+    system.add_relationship("竞争对手", "hostile");
+    system
+}
+
+/// 快速分析一组参数值的耦合效应
+pub fn quick_analyze(values: &HashMap<String, f64>) -> Vec<CouplingAnalysisResult> {
+    let mut system = PersonalitySystem::new();
+    for (id, val) in values {
+        let _ = system.set_value(id, *val);
+    }
+    system.analyze_couplings()
+}
+
+/// 批量生成 N 份档案，返回各格式字符串数组
+pub fn batch_generate(n: usize, format: &str) -> Vec<String> {
+    let collapse_params = ["B015", "A009", "C033", "F061", "D040", "B021", "C031", "E046"];
+    (0..n).map(|_| {
+        let mut system = PersonalitySystem::new();
+        let all_ids = system.all_parameter_ids();
+        let mut tendencies = HashMap::new();
+        for id in &all_ids {
+            tendencies.insert(id.clone(), "any".to_string());
+        }
+        let _ = system.set_tendencies(&tendencies);
+        system.add_relationship("家人", "intimate");
+        system.add_relationship("同事", "acquaintance");
+        system.add_relationship("陌生人", "stranger");
+        system.add_relationship("竞争对手", "hostile");
+        match format {
+            "raw" | "json" => system.export_profile_json(&collapse_params),
+            "ai" => system.export_profile_ai_md(&collapse_params),
+            _ => system.export_profile_text(&collapse_params),
+        }
+    }).collect()
+}
+
+/// 批量生成并返回三格式元组 (human_md, ai_md, raw_json)
+pub fn batch_generate_triple(n: usize) -> Vec<(String, String, String)> {
+    let collapse_params = ["B015", "A009", "C033", "F061", "D040", "B021", "C031", "E046"];
+    (0..n).map(|_| {
+        let mut system = PersonalitySystem::new();
+        let all_ids = system.all_parameter_ids();
+        let mut tendencies = HashMap::new();
+        for id in &all_ids {
+            tendencies.insert(id.clone(), "any".to_string());
+        }
+        let _ = system.set_tendencies(&tendencies);
+        system.add_relationship("家人", "intimate");
+        system.add_relationship("同事", "acquaintance");
+        system.add_relationship("陌生人", "stranger");
+        system.add_relationship("竞争对手", "hostile");
+        (
+            system.export_profile_text(&collapse_params),
+            system.export_profile_ai_md(&collapse_params),
+            system.export_profile_json(&collapse_params),
+        )
+    }).collect()
 }
 
 // ============================================================================
