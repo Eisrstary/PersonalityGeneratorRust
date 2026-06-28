@@ -10,27 +10,4 @@ license = "MIT"
 [lib]
 name = "personality_generator"
 path = "src/lib.rs"
-
-[[example]]
-name = "demo"
-path = "examples/demo.rs"
-
-[[example]]
-name = "stress_test"
-path = "examples/stress_test.rs"
-
-[[example]]
-name = "collision_test"
-path = "examples/collision_test.rs"
-
-[[example]]
-name = "extreme_test"
-path = "examples/extreme_test.rs"
-
-[[example]]
-name = "deep_test"
-path = "examples/deep_test.rs"
-
-[[example]]
-name = "attack_test"
-path = "examples/attack_test.rs"
+crate-type = ["lib", "cdylib", "staticlib"]

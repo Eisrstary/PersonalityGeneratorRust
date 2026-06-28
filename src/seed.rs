@@ -130,11 +130,15 @@ impl Seed {
 
     /// 从 hex 字符串反序列化。
     pub fn from_hex(hex: &str) -> Result<Self, SeedError> {
+        let hex = hex.as_bytes();
         if hex.len() != Self::SIZE * 2 {
             return Err(SeedError::InvalidHexLength(hex.len()));
         }
         let mut data = [0u8; Self::SIZE];
-        for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
+        for (i, chunk) in hex.chunks(2).enumerate() {
+            if chunk.len() < 2 {
+                return Err(SeedError::InvalidHexLength(hex.len()));
+            }
             let hi = hex_nibble(chunk[0]).ok_or(SeedError::InvalidHexChar(chunk[0] as char))?;
             let lo = hex_nibble(chunk[1]).ok_or(SeedError::InvalidHexChar(chunk[1] as char))?;
             data[i] = (hi << 4) | lo;
@@ -157,7 +161,8 @@ impl Seed {
         if p + 4 > Self::SIZE { return Err(SeedExhausted); }
         let raw = u32::from_le_bytes(self.data[p..p + 4].try_into().unwrap());
         self.pos += 4;
-        Ok(raw as f32 / u32::MAX as f32)
+        // 用 f64 做除法避免精度损失，然后转为 f32
+        Ok((raw as f64 / u32::MAX as f64) as f32)
     }
 
     pub fn read_bit(&mut self) -> Result<bool, SeedExhausted> {
